@@ -28,9 +28,10 @@ class StorageVisualizer:
 
     def _load_assets(self):
         """Initialize visualization assets"""
-        self.font_small = pygame.font.SysFont('Arial', 18)
-        self.font_medium = pygame.font.SysFont('Arial', 20)
-        self.font_large = pygame.font.SysFont('Arial', 24)
+        self.font_small = pygame.font.SysFont('Arial', 16)
+        self.font_medium = pygame.font.SysFont('Arial', 18)
+        self.font_large = pygame.font.SysFont('Arial', 22)
+        self.font_tiny = pygame.font.SysFont('Arial', 14)
         
         self.colors = {
             'background': (240, 240, 240),
@@ -42,7 +43,8 @@ class StorageVisualizer:
             'recommendation': (0, 150, 255),
             'grid_line': (180, 180, 180),
             'position': (0, 0, 0),
-            'frame': (200, 200, 200)
+            'frame': (200, 200, 200),
+            'legend': (80, 80, 80)
         }
         
         self.icons = {
@@ -53,8 +55,9 @@ class StorageVisualizer:
         }
 
     def _create_crop_icon(self):
-        surf = pygame.Surface((40, 40), pygame.SRCALPHA)
-        pygame.draw.circle(surf, (100, 180, 100), (20, 20), 18)
+        """More subtle crop icon"""
+        surf = pygame.Surface((30, 30), pygame.SRCALPHA)
+        pygame.draw.circle(surf, (80, 160, 80, 150), (15, 15), 12)  # Semi-transparent
         return surf
 
     def _create_silo_icon(self):
@@ -90,6 +93,7 @@ class StorageVisualizer:
         self._draw_storage_facility()
         self._draw_status_panel()
         self._draw_action_history()
+        self._draw_legend()
         
         pygame.display.flip()
         self.clock.tick(10)
@@ -110,11 +114,10 @@ class StorageVisualizer:
         # Pest level overlay
         pest_color = self._get_pest_color()
         s = pygame.Surface((300, 200), pygame.SRCALPHA)
-        s.fill((*pest_color[:3], 100))  # Semi-transparent
+        s.fill((*pest_color[:3], 100))
         self.screen.blit(s, (250, 150))
         
         # Draw icons
-        self.screen.blit(self.icons['crop'], (360, 260))
         self.screen.blit(self.icons['silo'], (700, 30))
         
         # Pest meter
@@ -165,34 +168,62 @@ class StorageVisualizer:
                 self.screen.blit(value_text, (x - 40, y + i - 10))
 
     def _draw_status_panel(self):
-        """Draw right-side status panel"""
-        pygame.draw.rect(self.screen, (230, 230, 230), (600, 400, 180, 180), border_radius=5)
+        """Improved right-side panel without overlapping"""
+        panel_width = 200
+        pygame.draw.rect(self.screen, (240, 240, 240), (600, 400, panel_width, 180), border_radius=5)
         
+        # Column 1
         texts = [
             f"Day: {self.env.day}/{self.env.config['max_days']}",
-            f"Pos: {self.env.current_pos}",
+            f"Position: {self.env.current_pos}",
             f"Temp: {self.env.state['temp'][0]:.1f}°C",
-            f"Humidity: {self.env.state['humidity'][0]:.1f}%",
+            f"Humidity: {self.env.state['humidity'][0]:.1f}%"
+        ]
+        for i, text in enumerate(texts):
+            self.screen.blit(
+                self.font_small.render(text, True, self.colors['text']),
+                (610, 410 + i * 25)
+            )
+        
+        # Column 2
+        texts = [
             f"Crop: {self.env.CROP_TYPES[self.env.state['crop_type']]}",
             f"Storage: {self.env.STORAGE_METHODS[self.env.state['storage_method']]}"
         ]
-        
         for i, text in enumerate(texts):
-            text_surface = self.font_small.render(text, True, self.colors['text'])
-            self.screen.blit(text_surface, (610, 410 + i * 22))
-            
+            self.screen.blit(
+                self.font_small.render(text, True, self.colors['text']),
+                (610 + panel_width//2, 410 + i * 25)
+            )
+        
         # Recommended action
         if hasattr(self.env, 'last_info'):
-            rec_text = f"Recommended: {self.env.last_info['recommended']}"
-            rec_surface = self.font_medium.render(rec_text, True, self.colors['recommendation'])
-            self.screen.blit(rec_surface, (610, 520))
+            rec_text = f"Suggested: {self.env.last_info['recommended']}"
+            self.screen.blit(
+                self.font_medium.render(rec_text, True, self.colors['recommendation']),
+                (610, 520)
+            )
 
     def _draw_action_history(self):
-        """Draw action history at bottom"""
-        if hasattr(self.env, 'last_action') and self.env.last_action is not None:
-            action_text = f"Last Action: {self.env.ACTIONS[self.env.last_action]}"
+        """Show current action at bottom"""
+        if hasattr(self.env, 'last_action'):
+            action_text = f"Current Action: {self.env.ACTIONS[self.env.last_action]}"
             text_surface = self.font_large.render(action_text, True, self.colors['action'])
             self.screen.blit(text_surface, (50, 500))
+
+    def _draw_legend(self):
+        """Add color legend for grid zones"""
+        legend_texts = [
+            "Zone Colors:",
+            "Green = Low Risk",
+            "Yellow = Medium Risk",
+            "Red = High Risk"
+        ]
+        
+        for i, text in enumerate(legend_texts):
+            color = self.colors['legend'] if i == 0 else self.colors['text']
+            text_surf = self.font_tiny.render(text, True, color)
+            self.screen.blit(text_surf, (250, 370 + i * 16))
 
     def _get_pest_color(self) -> Tuple[int, int, int]:
         """Get color based on pest level"""

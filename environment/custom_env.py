@@ -194,7 +194,7 @@ class StorageEnv(gym.Env):
         terminated = self._check_termination()
         
         self.last_info = {
-            "action": self.ACTIONS[action],
+            "current_action": self.ACTIONS[action],  # Changed from "action"
             "recommended": self.ACTIONS[recommended],
             "day": self.day,
             "position": tuple(self.current_pos),
@@ -263,7 +263,7 @@ class StorageEnv(gym.Env):
         print(f"Pest Risk: {pest_bar} {self.pest_level*100:.1f}%")
         
         if hasattr(self, 'last_info'):
-            print(f"Last Action: {self.last_info['action']}")
+            print(f"Current Action: {self.last_info['current_action']}")
             print(f"Recommended: {self.last_info['recommended']}")
 
     def render(self):

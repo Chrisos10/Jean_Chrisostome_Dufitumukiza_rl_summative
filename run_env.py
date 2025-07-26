@@ -4,7 +4,7 @@ import time
 import pygame
 import sys
 
-def run_continuous_environment(render_mode: str = 'human', max_episodes: int = None):
+def run_continuous_environment(render_mode: str = 'human'):
     """
     Enhanced runner for the Farm Storage Optimization Environment
     with full support for spatial grid system and recommendations
@@ -22,7 +22,7 @@ def run_continuous_environment(render_mode: str = 'human', max_episodes: int = N
 
         episode = 0
         
-        while max_episodes is None or episode < max_episodes:
+        while True:  # Infinite loop
             episode += 1
             state, _ = env.reset()
             total_reward = 0
@@ -61,7 +61,7 @@ def run_continuous_environment(render_mode: str = 'human', max_episodes: int = N
                         f"Reward: {total_reward:.1f}"
                     )
                 elif render_mode == 'console':
-                    if step % 5 == 0 or terminated:  # Reduce console spam
+                    if step % 5 == 0 or terminated:
                         print(f"Day {env.day}: Pos {env.current_pos} | "
                               f"Action: {env.ACTIONS[action]} | "
                               f"Pest: {env.pest_level:.1%} | "
@@ -70,21 +70,22 @@ def run_continuous_environment(render_mode: str = 'human', max_episodes: int = N
                             print(f"Recommended: {info['recommended']}")
                     time.sleep(0.1)
                 
-                # Early termination if pests take over
                 if env.pest_level >= 0.95:
                     terminated = True
             
-            # Episode summary
+            # Episode summary - UPDATED TO USE 'current_action' INSTEAD OF 'action'
             print(f"\nEpisode {episode} completed in {env.day} days")
             print(f"Final Position: {env.current_pos}")
             print(f"Final Pest Level: {env.pest_level:.1%}")
             print(f"Total Reward: {total_reward:.1f}")
-            print(f"Last Action: {info['action']}")
-            print(f"Recommended Action: {info['recommended']}")
+            if hasattr(env, 'last_info') and env.last_info is not None:
+                print(f"Current Action: {env.last_info.get('current_action', 'N/A')}")
+                print(f"Recommended Action: {env.last_info.get('recommended', 'N/A')}")
+            else:
+                print("Action information not available")
             
-            # Pause between episodes
             if render_mode == 'human':
-                time.sleep(1.5)  # Longer pause to observe results
+                time.sleep(1.5)
     
     except KeyboardInterrupt:
         print("\nSimulation stopped by user")
@@ -103,12 +104,7 @@ if __name__ == "__main__":
     parser.add_argument('--render', type=str, default='human',
                       choices=['human', 'console'], 
                       help='Rendering mode (human=visual, console=text)')
-    parser.add_argument('--episodes', type=int, default=None,
-                      help='Maximum number of episodes to run (None for infinite)')
     
     args = parser.parse_args()
     
-    run_continuous_environment(
-        render_mode=args.render,
-        max_episodes=args.episodes
-    )
+    run_continuous_environment(render_mode=args.render)
