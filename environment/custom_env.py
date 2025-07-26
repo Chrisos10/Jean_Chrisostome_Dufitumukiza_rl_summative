@@ -2,24 +2,40 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import random
+from environment.rendering import StorageVisualizer
 from typing import Optional, Dict, Tuple
-from environment.my_weather import get_weather, WeatherSimulator
-import pygame  # for visualization
-
+from environment.my_weather import get_weather  # Your weather module (real or mock)
 
 class StorageEnv(gym.Env):
+    """
+    Final Farm Storage Optimization Environment
+    with optional PyGame visualization support
+    """
+    
+    # Constants for readability
     CROP_TYPES = ["Maize", "Beans", "Rice"]
     STORAGE_METHODS = ["Silo", "Bags", "Traditional"]
     ACTIONS = [
-        "Move North", "Move Northeast", "Move East", "Move Southeast",
-        "Move South", "Move Southwest", "Move West", "Move Northwest",
-        "Apply Treatment"
+        "Do nothing",
+        "Increase ventilation",
+        "Decrease ventilation",
+        "Apply natural repellent",
+        "Apply diatomaceous earth",
+        "Reduce quantity",
+        "Immediate harvest/sell"
     ]
-
-    metadata = {"render.modes": ["human", "rgb_array", "console"]}
+    
+    metadata = {'render.modes': ['human', 'rgb_array', 'console']}
 
     def __init__(self, config: Optional[Dict] = None, render_mode: Optional[str] = None):
+        """
+        Args:
+            config: Environment configuration dictionary
+            render_mode: None, 'human', 'rgb_array', or 'console'
+        """
         super().__init__()
+        
+        # Configuration with defaults
         self.config = config or {
             'max_days': 30,
             'initial_pest': 0.1,
@@ -30,220 +46,212 @@ class StorageEnv(gym.Env):
                 'base_risk': 0.05
             }
         }
-
-        self.grid_size = 5
-        self.agent_pos = np.array([2, 2])
-        self.state_info = self._create_state_map()
-
-        self.observation_space = spaces.Box(
-            low=np.array([0, 0, 0, 10, 25, 0, 0]),
-            high=np.array([4, 4, 1, 40, 95, 2, 2]),
-            dtype=np.float32
-        )
-
-        self.action_space = spaces.Discrete(9)
-
-        self.weather_sim = WeatherSimulator(location=self.config['location'])
-        self.weather_sim.use_real_api = False
-
+        
         self.render_mode = render_mode
         self.visualizer = None
+        
+        # Initialize visualization if requested
         if self.render_mode == 'human':
             self._init_visualization()
 
-    def _create_state_map(self) -> Dict[Tuple[int, int], Dict]:
-        state_map = {}
-        for x in range(self.grid_size):
-            for y in range(self.grid_size):
-                base_risk = 0.1 + (abs(x - 2) + abs(y - 2)) * 0.15
-                state_map[(x, y)] = {
-                    "condition": self._get_condition_label(base_risk),
-                    "intervention": self._get_intervention(base_risk),
-                    "base_risk": np.array([base_risk], dtype=np.float32)
-                }
-        return state_map
+        # Enhanced observation space
+        self.observation_space = spaces.Dict({
+            "temp": spaces.Box(0, 50, shape=(1,), dtype=np.float32),
+            "humidity": spaces.Box(0, 100, shape=(1,), dtype=np.float32),
+            "crop_type": spaces.Discrete(3),
+            "storage_method": spaces.Discrete(3),
+            "duration": spaces.Box(0, self.config['max_days'], shape=(1,), dtype=np.float32),
+            "previous_pest": spaces.Discrete(2),
+            "pest_level": spaces.Box(0, 1, shape=(1,), dtype=np.float32)
+        })
 
-    def _get_condition_label(self, risk: float) -> str:
-        if risk > 0.7: 
-            return "Critical"
-        elif risk > 0.4: 
-            return "Moderate"
-        return "Safe"
+        # Action space
+        self.action_space = spaces.Discrete(7)
 
-    def _get_intervention(self, risk: float) -> str:
-        if risk > 0.7: 
-            return "Emergency Harvest"
-        elif risk > 0.5: 
-            return "Apply Treatment"
-        elif risk > 0.3: 
-            return "Increase Ventilation"
-        return "Monitor"
+        # Environment state
+        self.day = 0
+        self.pest_level = self.config['initial_pest']
+        self.state = None
+        self.last_action = None
 
     def _init_visualization(self):
+        """Initialize PyGame visualization if available"""
         try:
             self.visualizer = StorageVisualizer(self)
         except ImportError as e:
             print(f"Visualization disabled: {str(e)}")
             self.visualizer = None
-            self.render_mode = "console"
+            self.render_mode = 'console'
 
     def reset(self, seed: Optional[int] = None, options: Optional[Dict] = None) -> Tuple[np.ndarray, Dict]:
+        """Reset the environment to initial state"""
         super().reset(seed=seed)
-        self.agent_pos = np.array([2, 2])
+        
         self.day = 0
+        self.pest_level = self.config['initial_pest']
+        self.last_action = None
 
+        # Get weather data
         try:
-            self.temp, self.humidity = get_weather(location=self.config['location'], grid_pos=tuple(self.agent_pos))
+            temperature, humidity = get_weather(location=self.config['location'])
         except Exception as e:
-            print(f"Weather error: {e}. Using defaults.")
-            self.temp = 28.0
-            self.humidity = 65.0
+            print(f"Weather API error: {str(e)}. Using defaults.")
+            temperature, humidity = 28.0, 65.0  # Fallback values
 
-        self.crop_type = random.randint(0, 2)
-        self.storage_method = random.randint(0, 2)
-        self._update_state()
+        # Initialize state
+        self.state = {
+            "temp": np.array([temperature], dtype=np.float32),
+            "humidity": np.array([humidity], dtype=np.float32),
+            "crop_type": random.randint(0, 2),
+            "storage_method": random.randint(0, 2),
+            "duration": np.array([0], dtype=np.float32),
+            "previous_pest": 0,
+            "pest_level": np.array([self.pest_level], dtype=np.float32)
+        }
 
-        if self.visualizer:
+        if self.render_mode == 'human' and self.visualizer:
             self.visualizer.reset()
 
-        return self._flatten_state(), {}
+        return self._flatten_state(self.state), {}
 
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict]:
+        """Execute one environment step"""
         assert self.action_space.contains(action), f"Invalid action {action}"
-
-        reward = 0
+        
+        self.last_action = action
+        reward = 0.0
         terminated = False
-        prev_pos = self.agent_pos.copy()
+        truncated = False
 
-        if action < 8:
-            moves = [(-1, 0), (-1, 1), (0, 1), (1, 1),
-                     (1, 0), (1, -1), (0, -1), (-1, -1)]
-            dx, dy = moves[action]
-            new_pos = np.clip(self.agent_pos + [dx, dy], 0, self.grid_size - 1)
-            self.agent_pos = new_pos
-
-            reward = -0.1
-            prev_risk = self.state_info[tuple(prev_pos)]["base_risk"][0]
-            new_risk = self.state_info[tuple(new_pos)]["base_risk"][0]
-            if new_risk > prev_risk:
-                reward -= 0.2 * (new_risk - prev_risk)
-        else:
-            current_risk = self._get_current_risk()
-            reward = 2 * current_risk
-            self.state_info[tuple(self.agent_pos)]["base_risk"][0] *= 0.7
-
+        # Simulate daily changes
+        self._simulate_weather_change()
+        self._update_pest_level()
+        
+        # Apply action effects
+        reward = self._apply_action_effects(action)
+        
+        # Update state
         self.day += 1
-        self.temp, self.humidity = get_weather(
-            location=self.config['location'],
-            grid_pos=tuple(self.agent_pos))
-
-        self._update_state()
-        terminated = self.day >= self.config['max_days']
-
+        self.state["duration"] = np.array([self.day], dtype=np.float32)
+        self.state["previous_pest"] = 1 if self.pest_level > 0.3 else 0
+        self.state["pest_level"] = np.array([self.pest_level], dtype=np.float32)
+        
+        # Check termination
+        terminated = self._check_termination()
+        
         info = {
+            "action": self.ACTIONS[action],
             "day": self.day,
-            "position": tuple(self.agent_pos),
-            "condition": self.state_info[tuple(self.agent_pos)]["condition"],
-            "intervention": self.state_info[tuple(self.agent_pos)]["intervention"],
-            "weather": (float(self.temp), float(self.humidity)),
-            "recommended": self._get_recommended_action()
+            "pest_level": float(self.pest_level),
+            "weather": (float(self.state["temp"][0]), float(self.state["humidity"][0]))
         }
 
-        return self._flatten_state(), reward, terminated, False, info
-
-    def _update_state(self):
-        current_risk = self._get_current_risk()
-        self.current_state = {
-            "position": self.agent_pos.copy(),
-            "risk_level": np.array([current_risk], dtype=np.float32),
-            "temp": self.temp,
-            "humidity": self.humidity,
-            "crop_type": self.crop_type,
-            "storage_method": self.storage_method
-        }
-
-    def _get_current_risk(self) -> float:
-        base_risk = self.state_info[tuple(self.agent_pos)]["base_risk"][0]
-        temp_effect = max(0, self.temp - 25) * 0.01
-        humidity_effect = max(0, self.humidity - 60) * 0.015
-        crop_factor = [0.8, 1.0, 1.2][self.crop_type]
-        storage_effect = [0.0, 0.02, 0.05][self.storage_method]
-        return np.clip(base_risk + temp_effect + humidity_effect + storage_effect * crop_factor, 0, 1)
-
-    def _get_recommended_action(self) -> str:
-        current_risk = self._get_current_risk()
-        if current_risk > 0.7:
-            return "Apply Treatment immediately"
-        elif current_risk > 0.5:
-            return "Move to safer area or apply treatment"
-        return "Monitor conditions"
-
-    def _flatten_state(self) -> np.ndarray:
-        return np.array([
-            self.current_state["position"][0],
-            self.current_state["position"][1],
-            self.current_state["risk_level"][0],
-            self.current_state["temp"],
-            self.current_state["humidity"],
-            self.current_state["crop_type"],
-            self.current_state["storage_method"]
-        ], dtype=np.float32)
+        return self._flatten_state(self.state), reward, terminated, truncated, info
 
     def render(self) -> Optional[np.ndarray]:
+        """Render the environment"""
         if self.render_mode == 'human' and self.visualizer:
             return self.visualizer.render()
-        elif self.render_mode == 'console':
-            print(
-                f"Day {self.day}: Pos {tuple(self.agent_pos)} | "
-                f"Risk: {self.current_state['risk_level'][0]:.2f} | "
-                f"Temp: {self.temp:.1f}°C | Hum: {self.humidity:.1f}%"
-            )
+        elif self.render_mode == 'console' or self.render_mode is None:
+            self._console_render()
+            return None
         elif self.render_mode == 'rgb_array':
             if self.visualizer:
                 return self.visualizer.get_rgb_array()
-            return np.zeros((600, 800, 3), dtype=np.uint8)
+            else:
+                return self._get_rgb_array()
         return None
-
+        
     def close(self):
+        """Clean up resources"""
         if self.visualizer:
             self.visualizer.close()
 
+    # ===== Helper Methods =====
+    def _flatten_state(self, state: Dict) -> np.ndarray:
+        """Convert state dict to flat array for compatibility"""
+        return np.concatenate([
+            state["temp"],
+            state["humidity"],
+            [state["crop_type"]],
+            [state["storage_method"]],
+            state["duration"],
+            [state["previous_pest"]],
+            state["pest_level"]
+        ])
 
-class StorageVisualizer:
-    def __init__(self, env):
-        pygame.init()
-        self.env = env
-        self.size = 600
-        self.screen = pygame.display.set_mode((self.size, self.size))
-        pygame.display.set_caption("Storage Environment Visualization")
-        self.clock = pygame.time.Clock()
-        self.grid_size = env.grid_size
+    def _simulate_weather_change(self):
+        """Simulate daily weather fluctuations"""
+        temp_change = random.uniform(-2, 2)
+        humidity_change = random.uniform(-5, 5)
+        
+        self.state["temp"] = np.clip(
+            self.state["temp"] + temp_change,
+            10, 40  # realistic temp range
+        )
+        self.state["humidity"] = np.clip(
+            self.state["humidity"] + humidity_change,
+            30, 90  # realistic humidity range
+        )
 
-    def render(self):
-        self.screen.fill((255, 255, 255))  # White background
+    def _update_pest_level(self):
+        """Calculate pest level increase based on conditions"""
+        base_risk = self.config['risk_factors']['base_risk']
+        
+        # Environmental effects
+        temp_effect = max(0, self.state["temp"][0] - 25) * 0.01
+        humidity_effect = max(0, self.state["humidity"][0] - 60) * 0.015
+        storage_effect = [0.0, 0.02, 0.05][self.state["storage_method"]]
+        crop_factor = [0.8, 1.0, 1.2][self.state["crop_type"]]
+        
+        risk_increase = (base_risk + temp_effect + humidity_effect + storage_effect) * crop_factor
+        self.pest_level = np.clip(self.pest_level + risk_increase, 0, 1)
 
-        cell_size = self.size // self.grid_size
+    def _apply_action_effects(self, action: int) -> float:
+        """Apply action effects and return reward"""
+        action_effects = {
+            0: (0, -1),       # Do nothing
+            1: (-0.05, 1),    # Increase ventilation
+            2: (0.1, -1),     # Decrease ventilation
+            3: (-0.1, 2),     # Natural repellent
+            4: (-0.15, 3),    # Diatomaceous earth
+            5: (-0.05, 1),    # Reduce quantity
+            6: (0, 5 if self.pest_level < 0.5 else -5)  # Harvest/sell
+        }
+        
+        pest_change, reward = action_effects[action]
+        self.pest_level = np.clip(self.pest_level + pest_change, 0, 1)
+        
+        # Additional reward shaping
+        if self.pest_level > 0.8:
+            reward -= 5  # High risk penalty
+        if action in [3, 4] and self.pest_level > 0.3:
+            reward *= 1.5  # Bonus for timely treatment
+            
+        return reward
 
-        # Draw grid
-        for x in range(self.grid_size):
-            for y in range(self.grid_size):
-                rect = pygame.Rect(x * cell_size, y * cell_size, cell_size, cell_size)
-                pygame.draw.rect(self.screen, (200, 200, 200), rect, 1)
+    def _check_termination(self) -> bool:
+        """Check if episode should terminate"""
+        return (
+            self.pest_level >= 1.0 or 
+            self.day >= self.config['max_days'] or 
+            (self.last_action == 6)  # Harvest action
+        )
 
-        # Draw agent
-        agent_x, agent_y = self.env.agent_pos
-        agent_rect = pygame.Rect(agent_x * cell_size, agent_y * cell_size, cell_size, cell_size)
-        pygame.draw.rect(self.screen, (0, 128, 255), agent_rect)
+    def _console_render(self):
+        """Text-based rendering for console"""
+        print(f"\n=== Day {self.day}/{self.config['max_days']} ===")
+        print(f"Temp: {self.state['temp'][0]:.1f}°C | Humidity: {self.state['humidity'][0]:.1f}%")
+        print(f"Crop: {self.CROP_TYPES[self.state['crop_type']]} | Storage: {self.STORAGE_METHODS[self.state['storage_method']]}")
+        
+        pest_bar = '█' * int(self.pest_level * 20) + '░' * (20 - int(self.pest_level * 20))
+        print(f"Pest Risk: {pest_bar} {self.pest_level*100:.1f}%")
+        
+        if self.last_action is not None:
+            print(f"Last Action: {self.ACTIONS[self.last_action]}")
 
-        pygame.display.flip()
-        self.clock.tick(30)
-
-    def get_rgb_array(self):
-        arr = pygame.surfarray.array3d(self.screen)
-        return np.transpose(arr, (1, 0, 2))  # swap axes for proper image orientation
-
-    def close(self):
-        pygame.quit()
-
-    def reset(self):
-        self.render()
+    def _get_rgb_array(self) -> np.ndarray:
+        """Get RGB array for video recording (fallback)"""
+        if self.visualizer:
+            return self.visualizer.get_rgb_array()
+        return np.zeros((600, 800, 3), dtype=np.uint8)

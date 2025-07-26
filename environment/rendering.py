@@ -1,255 +1,218 @@
-import gymnasium as gym
-from gymnasium import spaces
+import pygame
 import numpy as np
-import random
-from typing import Optional, Dict, Tuple
-
-import pygame  # For visualization
-
-from environment.my_weather import get_weather, WeatherSimulator
-
-
-class StorageEnv(gym.Env):
-    CROP_TYPES = ["Maize", "Beans", "Rice"]
-    STORAGE_METHODS = ["Silo", "Bags", "Traditional"]
-    ACTIONS = [
-        "Move North", "Move Northeast", "Move East", "Move Southeast",
-        "Move South", "Move Southwest", "Move West", "Move Northwest",
-        "Apply Treatment"
-    ]
-
-    metadata = {"render.modes": ["human", "rgb_array", "console"]}
-
-    def __init__(self, config: Optional[Dict] = None, render_mode: Optional[str] = None):
-        super().__init__()
-        self.config = config or {
-            'max_days': 30,
-            'initial_pest': 0.1,
-            'location': "Kigali",
-            'risk_factors': {
-                'temp_high_risk': 35,
-                'humidity_high_risk': 70,
-                'base_risk': 0.05
-            }
-        }
-
-        self.grid_size = 5
-        self.agent_pos = np.array([2, 2])
-        self.state_info = self._create_state_map()
-
-        self.observation_space = spaces.Box(
-            low=np.array([0, 0, 0, 10, 25, 0, 0]),
-            high=np.array([4, 4, 1, 40, 95, 2, 2]),
-            dtype=np.float32
-        )
-
-        self.action_space = spaces.Discrete(9)
-
-        self.weather_sim = WeatherSimulator(location=self.config['location'])
-        self.weather_sim.use_real_api = False
-
-        self.render_mode = render_mode
-        self.visualizer = None
-        if self.render_mode == 'human':
-            self._init_visualization()
-
-    def _init_visualization(self):
-        try:
-            self.visualizer = StorageVisualizer(self)
-        except ImportError as e:
-            print(f"Visualization disabled: {str(e)}")
-            self.visualizer = None
-            self.render_mode = "console"
-
-    def _create_state_map(self) -> Dict[Tuple[int, int], Dict]:
-        state_map = {}
-        for x in range(self.grid_size):
-            for y in range(self.grid_size):
-                base_risk = 0.1 + (abs(x - 2) + abs(y - 2)) * 0.15
-                state_map[(x, y)] = {
-                    "condition": self._get_condition_label(base_risk),
-                    "intervention": self._get_intervention(base_risk),
-                    "base_risk": np.array([base_risk], dtype=np.float32)
-                }
-        return state_map
-
-    def _get_condition_label(self, risk: float) -> str:
-        if risk > 0.7:
-            return "Critical"
-        elif risk > 0.4:
-            return "Moderate"
-        return "Safe"
-
-    def _get_intervention(self, risk: float) -> str:
-        if risk > 0.7:
-            return "Emergency Harvest"
-        elif risk > 0.5:
-            return "Apply Treatment"
-        elif risk > 0.3:
-            return "Increase Ventilation"
-        return "Monitor"
-
-    def reset(self, seed: Optional[int] = None, options: Optional[Dict] = None) -> Tuple[np.ndarray, Dict]:
-        super().reset(seed=seed)
-        self.agent_pos = np.array([2, 2])
-        self.day = 0
-
-        try:
-            self.temp, self.humidity = get_weather(location=self.config['location'], grid_pos=tuple(self.agent_pos))
-            self.temp = float(self.temp)
-            self.humidity = float(self.humidity)
-        except Exception as e:
-            print(f"Weather error: {e}. Using defaults.")
-            self.temp = 28.0
-            self.humidity = 65.0
-
-        self.crop_type = random.randint(0, 2)
-        self.storage_method = random.randint(0, 2)
-        self._update_state()
-
-        if self.visualizer:
-            self.visualizer.reset()
-
-        return self._flatten_state(), {}
-
-    def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict]:
-        assert self.action_space.contains(action), f"Invalid action {action}"
-
-        reward = 0
-        terminated = False
-        prev_pos = self.agent_pos.copy()
-
-        if action < 8:
-            moves = [(-1, 0), (-1, 1), (0, 1), (1, 1),
-                     (1, 0), (1, -1), (0, -1), (-1, -1)]
-            dx, dy = moves[action]
-            new_pos = np.clip(self.agent_pos + [dx, dy], 0, self.grid_size - 1)
-            self.agent_pos = new_pos
-
-            reward = -0.1
-            prev_risk = self.state_info[tuple(prev_pos)]["base_risk"][0]
-            new_risk = self.state_info[tuple(new_pos)]["base_risk"][0]
-            if new_risk > prev_risk:
-                reward -= 0.2 * (new_risk - prev_risk)
-        else:
-            current_risk = self._get_current_risk()
-            reward = 2 * current_risk
-            self.state_info[tuple(self.agent_pos)]["base_risk"][0] *= 0.7
-
-        self.day += 1
-        self.temp, self.humidity = get_weather(
-            location=self.config['location'],
-            grid_pos=tuple(self.agent_pos))
-        self.temp = float(self.temp)
-        self.humidity = float(self.humidity)
-
-        self._update_state()
-        terminated = self.day >= self.config['max_days']
-
-        info = {
-            "day": self.day,
-            "position": tuple(self.agent_pos),
-            "condition": self.state_info[tuple(self.agent_pos)]["condition"],
-            "intervention": self.state_info[tuple(self.agent_pos)]["intervention"],
-            "weather": (self.temp, self.humidity),
-            "recommended": self._get_recommended_action()
-        }
-
-        return self._flatten_state(), reward, terminated, False, info
-
-    def _update_state(self):
-        current_risk = self._get_current_risk()
-        self.current_state = {
-            "position": self.agent_pos.copy(),
-            "risk_level": np.array([current_risk], dtype=np.float32),
-            "temp": self.temp,
-            "humidity": self.humidity,
-            "crop_type": self.crop_type,
-            "storage_method": self.storage_method
-        }
-
-    def _get_current_risk(self) -> float:
-        base_risk = self.state_info[tuple(self.agent_pos)]["base_risk"][0]
-        temp_effect = max(0, self.temp - 25) * 0.01
-        humidity_effect = max(0, self.humidity - 60) * 0.015
-        crop_factor = [0.8, 1.0, 1.2][self.crop_type]
-        storage_effect = [0.0, 0.02, 0.05][self.storage_method]
-        return np.clip(base_risk + temp_effect + humidity_effect + storage_effect * crop_factor, 0, 1)
-
-    def _get_recommended_action(self) -> str:
-        current_risk = self._get_current_risk()
-        if current_risk > 0.7:
-            return "Apply Treatment immediately"
-        elif current_risk > 0.5:
-            return "Move to safer area or apply treatment"
-        return "Monitor conditions"
-
-    def _flatten_state(self) -> np.ndarray:
-        return np.array([
-            self.current_state["position"][0],
-            self.current_state["position"][1],
-            self.current_state["risk_level"][0],
-            self.current_state["temp"],
-            self.current_state["humidity"],
-            self.current_state["crop_type"],
-            self.current_state["storage_method"]
-        ], dtype=np.float32)
-
-    def render(self) -> Optional[np.ndarray]:
-        if self.render_mode == 'human' and self.visualizer:
-            return self.visualizer.render()
-        elif self.render_mode == 'console':
-            print(
-                f"Day {self.day}: Pos {tuple(self.agent_pos)} | "
-                f"Risk: {self.current_state['risk_level'][0]:.2f} | "
-                f"Temp: {self.temp:.1f}°C | Hum: {self.humidity:.1f}%"
-            )
-        elif self.render_mode == 'rgb_array':
-            if self.visualizer:
-                return self.visualizer.get_rgb_array()
-            return np.zeros((600, 800, 3), dtype=np.uint8)
-        return None
-
-    def close(self):
-        if self.visualizer:
-            self.visualizer.close()
-
+from typing import Optional, Tuple
+import os
+from datetime import datetime
 
 class StorageVisualizer:
-    def __init__(self, env):
-        pygame.init()
+    def __init__(self, env, record_gif: bool = False):
+        """
+        PyGame visualization for StorageEnv
+        
+        Args:
+            env: The StorageEnv instance to visualize
+            record_gif: Whether to save frames for GIF creation
+        """
         self.env = env
-        self.size = 600
-        self.screen = pygame.display.set_mode((self.size, self.size))
-        pygame.display.set_caption("Storage Environment Visualization")
+        self.record_gif = record_gif
+        self.frames = [] if record_gif else None
+        
+        # Initialize PyGame
+        pygame.init()
+        self.screen = pygame.display.set_mode((800, 600))
+        pygame.display.set_caption("Farm Storage Optimization")
         self.clock = pygame.time.Clock()
-        self.grid_size = env.grid_size
-
-    def render(self):
-        self.screen.fill((255, 255, 255))  # White background
-
-        cell_size = self.size // self.grid_size
-
-        # Draw grid
-        for x in range(self.grid_size):
-            for y in range(self.grid_size):
-                rect = pygame.Rect(x * cell_size, y * cell_size, cell_size, cell_size)
-                pygame.draw.rect(self.screen, (200, 200, 200), rect, 1)
-
-        # Draw agent
-        agent_x, agent_y = self.env.agent_pos
-        agent_rect = pygame.Rect(agent_x * cell_size, agent_y * cell_size, cell_size, cell_size)
-        pygame.draw.rect(self.screen, (0, 128, 255), agent_rect)
-
-        pygame.display.flip()
-        self.clock.tick(30)
-
-    def get_rgb_array(self):
-        arr = pygame.surfarray.array3d(self.screen)
-        return np.transpose(arr, (1, 0, 2))  # swap axes for proper image orientation
-
-    def close(self):
-        pygame.quit()
+        
+        # Load assets
+        self._load_assets()
+        
+        # GIF recording
+        self.recording_dir = "recordings"
+        os.makedirs(self.recording_dir, exist_ok=True)
 
     def reset(self):
-        self.render()
+        """Reset any internal state if needed (e.g., clear frames)"""
+        if self.record_gif:
+            self.frames = []
+
+    def _load_assets(self):
+        """Initialize visualization assets"""
+        self.font_small = pygame.font.SysFont('Arial', 18)
+        self.font_large = pygame.font.SysFont('Arial', 24)
+        
+        # Color scheme
+        self.colors = {
+            'background': (240, 240, 240),
+            'safe': (100, 200, 100),
+            'warning': (255, 200, 100),
+            'danger': (220, 100, 100),
+            'text': (50, 50, 50),
+            'action': (70, 70, 200),
+            'frame': (200, 200, 200)
+        }
+        
+        # Icons (simplified with shapes)
+        self.icons = {
+            'crop': self._create_crop_icon(),
+            'silo': self._create_silo_icon(),
+            'ventilation': self._create_ventilation_icon()
+        }
+
+    def _create_crop_icon(self) -> pygame.Surface:
+        """Create a simple crop icon"""
+        surf = pygame.Surface((40, 40), pygame.SRCALPHA)
+        pygame.draw.circle(surf, (100, 180, 100), (20, 20), 18)
+        return surf
+
+    def _create_silo_icon(self) -> pygame.Surface:
+        """Create a simple storage icon"""
+        surf = pygame.Surface((40, 40), pygame.SRCALPHA)
+        pygame.draw.rect(surf, (150, 150, 150), (5, 10, 30, 30))
+        return surf
+
+    def _create_ventilation_icon(self) -> pygame.Surface:
+        """Create a ventilation icon"""
+        surf = pygame.Surface((40, 40), pygame.SRCALPHA)
+        pygame.draw.circle(surf, (200, 200, 200), (20, 20), 15)
+        for i in range(4):
+            angle = i * 90
+            x = 20 + 20 * np.cos(np.radians(angle))
+            y = 20 + 20 * np.sin(np.radians(angle))
+            pygame.draw.line(surf, (100, 100, 100), (20, 20), (x, y), 2)
+        return surf
+
+    def render(self) -> Optional[np.ndarray]:
+        """Render the current environment state"""
+        # Handle PyGame events
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                return None
+        
+        # Clear screen
+        self.screen.fill(self.colors['background'])
+        
+        # Draw main storage visualization
+        self._draw_storage_facility()
+        
+        # Draw status panel
+        self._draw_status_panel()
+        
+        # Draw action history
+        self._draw_action_history()
+        
+        # Update display
+        pygame.display.flip()
+        self.clock.tick(10)  # Control rendering speed
+        
+        # Capture frame if recording
+        if self.record_gif:
+            self._capture_frame()
+        
+        return self._get_rgb_array()
+
+    def _draw_storage_facility(self):
+        """Draw the main storage visualization"""
+        # Draw facility frame
+        pygame.draw.rect(self.screen, self.colors['frame'], (200, 100, 400, 350), border_radius=10)
+        
+        # Draw crop storage area (color based on pest level)
+        pest_color = self._get_pest_color()
+        pygame.draw.rect(self.screen, pest_color, (250, 150, 300, 250), border_radius=5)
+        
+        # Draw icons
+        self.screen.blit(self.icons['crop'], (360, 260))
+        self.screen.blit(self.icons['silo'], (700, 30))
+        
+        # Draw pest level indicator
+        self._draw_pest_meter(650, 150)
+
+    def _draw_pest_meter(self, x: int, y: int):
+        """Draw visual pest level indicator"""
+        # Background
+        pygame.draw.rect(self.screen, (220, 220, 220), (x, y, 30, 200))
+        
+        # Fill level
+        fill_height = int(200 * self.env.pest_level)
+        pest_color = self._get_pest_color()
+        pygame.draw.rect(self.screen, pest_color, (x, y + (200 - fill_height), 30, fill_height))
+        
+        # Markers
+        for i in range(0, 201, 40):
+            pygame.draw.line(self.screen, (100, 100, 100), (x - 5, y + i), (x, y + i), 2)
+            if i < 200:
+                value_text = self.font_small.render(f"{100 - i//2}%", True, self.colors['text'])
+                self.screen.blit(value_text, (x - 40, y + i - 10))
+
+    def _draw_status_panel(self):
+        """Draw the right-side status panel"""
+        # Panel background
+        pygame.draw.rect(self.screen, (230, 230, 230), (600, 400, 180, 180), border_radius=5)
+        
+        # Status text
+        texts = [
+            f"Day: {self.env.day}/{self.env.config['max_days']}",
+            f"Temp: {self.env.state['temp'][0]:.1f}°C",
+            f"Humidity: {self.env.state['humidity'][0]:.1f}%",
+            f"Crop: {self.env.CROP_TYPES[self.env.state['crop_type']]}",
+            f"Storage: {self.env.STORAGE_METHODS[self.env.state['storage_method']]}"
+        ]
+        
+        for i, text in enumerate(texts):
+            text_surface = self.font_small.render(text, True, self.colors['text'])
+            self.screen.blit(text_surface, (610, 410 + i * 25))
+
+    def _draw_action_history(self):
+        """Draw the action history at the bottom"""
+        if hasattr(self.env, 'last_action') and self.env.last_action is not None:
+            action_text = f"Last Action: {self.env.ACTIONS[self.env.last_action]}"
+            text_surface = self.font_large.render(action_text, True, self.colors['action'])
+            self.screen.blit(text_surface, (50, 500))
+
+    def _get_pest_color(self) -> Tuple[int, int, int]:
+        """Get color based on current pest level"""
+        if self.env.pest_level < 0.3:
+            return self.colors['safe']
+        elif self.env.pest_level < 0.7:
+            return self.colors['warning']
+        else:
+            return self.colors['danger']
+
+    def _capture_frame(self):
+        """Capture current frame for GIF recording"""
+        rgb_array = self._get_rgb_array()
+        if rgb_array is not None:
+            self.frames.append(rgb_array)
+
+    def _get_rgb_array(self) -> Optional[np.ndarray]:
+        """Get current frame as RGB array for video recording"""
+        try:
+            return np.transpose(
+                pygame.surfarray.array3d(self.screen),
+                axes=(1, 0, 2)
+            )
+        except:
+            return None
+
+    def get_rgb_array(self) -> Optional[np.ndarray]:
+        """Public accessor for RGB array"""
+        return self._get_rgb_array()
+
+    def save_gif(self, filename: Optional[str] = None):
+        """Save recorded frames as GIF (requires imageio)"""
+        if not self.frames:
+            return
+            
+        try:
+            import imageio
+            filename = filename or f"{self.recording_dir}/simulation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.gif"
+            imageio.mimsave(filename, self.frames, fps=5)
+            print(f"Saved GIF to {filename}")
+        except ImportError:
+            print("GIF saving requires imageio package")
+
+    def close(self):
+        """Clean up resources"""
+        if self.record_gif and self.frames:
+            self.save_gif()
+        pygame.quit()
