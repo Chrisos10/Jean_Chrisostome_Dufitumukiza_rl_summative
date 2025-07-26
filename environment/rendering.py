@@ -5,42 +5,33 @@ import os
 from datetime import datetime
 
 class StorageVisualizer:
+    """Enhanced visualization with grid system and recommendations"""
+    
     def __init__(self, env, record_gif: bool = False):
-        """
-        PyGame visualization for StorageEnv
-        
-        Args:
-            env: The StorageEnv instance to visualize
-            record_gif: Whether to save frames for GIF creation
-        """
         self.env = env
         self.record_gif = record_gif
         self.frames = [] if record_gif else None
         
-        # Initialize PyGame
         pygame.init()
         self.screen = pygame.display.set_mode((800, 600))
         pygame.display.set_caption("Farm Storage Optimization")
         self.clock = pygame.time.Clock()
         
-        # Load assets
         self._load_assets()
-        
-        # GIF recording
         self.recording_dir = "recordings"
         os.makedirs(self.recording_dir, exist_ok=True)
 
     def reset(self):
-        """Reset any internal state if needed (e.g., clear frames)"""
+        """Reset visualization"""
         if self.record_gif:
             self.frames = []
 
     def _load_assets(self):
         """Initialize visualization assets"""
         self.font_small = pygame.font.SysFont('Arial', 18)
+        self.font_medium = pygame.font.SysFont('Arial', 20)
         self.font_large = pygame.font.SysFont('Arial', 24)
         
-        # Color scheme
         self.colors = {
             'background': (240, 240, 240),
             'safe': (100, 200, 100),
@@ -48,30 +39,30 @@ class StorageVisualizer:
             'danger': (220, 100, 100),
             'text': (50, 50, 50),
             'action': (70, 70, 200),
+            'recommendation': (0, 150, 255),
+            'grid_line': (180, 180, 180),
+            'position': (0, 0, 0),
             'frame': (200, 200, 200)
         }
         
-        # Icons (simplified with shapes)
         self.icons = {
             'crop': self._create_crop_icon(),
             'silo': self._create_silo_icon(),
-            'ventilation': self._create_ventilation_icon()
+            'ventilation': self._create_ventilation_icon(),
+            'position': self._create_position_icon()
         }
 
-    def _create_crop_icon(self) -> pygame.Surface:
-        """Create a simple crop icon"""
+    def _create_crop_icon(self):
         surf = pygame.Surface((40, 40), pygame.SRCALPHA)
         pygame.draw.circle(surf, (100, 180, 100), (20, 20), 18)
         return surf
 
-    def _create_silo_icon(self) -> pygame.Surface:
-        """Create a simple storage icon"""
+    def _create_silo_icon(self):
         surf = pygame.Surface((40, 40), pygame.SRCALPHA)
         pygame.draw.rect(surf, (150, 150, 150), (5, 10, 30, 30))
         return surf
 
-    def _create_ventilation_icon(self) -> pygame.Surface:
-        """Create a ventilation icon"""
+    def _create_ventilation_icon(self):
         surf = pygame.Surface((40, 40), pygame.SRCALPHA)
         pygame.draw.circle(surf, (200, 200, 200), (20, 20), 15)
         for i in range(4):
@@ -81,54 +72,83 @@ class StorageVisualizer:
             pygame.draw.line(surf, (100, 100, 100), (20, 20), (x, y), 2)
         return surf
 
+    def _create_position_icon(self):
+        surf = pygame.Surface((30, 30), pygame.SRCALPHA)
+        pygame.draw.circle(surf, self.colors['position'], (15, 15), 12, 3)
+        return surf
+
     def render(self) -> Optional[np.ndarray]:
-        """Render the current environment state"""
-        # Handle PyGame events
+        """Render current environment state"""
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 return None
         
-        # Clear screen
         self.screen.fill(self.colors['background'])
         
-        # Draw main storage visualization
+        # Draw main components
         self._draw_storage_facility()
-        
-        # Draw status panel
         self._draw_status_panel()
-        
-        # Draw action history
         self._draw_action_history()
         
-        # Update display
         pygame.display.flip()
-        self.clock.tick(10)  # Control rendering speed
+        self.clock.tick(10)
         
-        # Capture frame if recording
         if self.record_gif:
             self._capture_frame()
         
         return self._get_rgb_array()
 
     def _draw_storage_facility(self):
-        """Draw the main storage visualization"""
-        # Draw facility frame
+        """Draw the main storage visualization with grid"""
+        # Facility frame
         pygame.draw.rect(self.screen, self.colors['frame'], (200, 100, 400, 350), border_radius=10)
         
-        # Draw crop storage area (color based on pest level)
+        # Draw the grid
+        self._draw_grid()
+        
+        # Pest level overlay
         pest_color = self._get_pest_color()
-        pygame.draw.rect(self.screen, pest_color, (250, 150, 300, 250), border_radius=5)
+        s = pygame.Surface((300, 200), pygame.SRCALPHA)
+        s.fill((*pest_color[:3], 100))  # Semi-transparent
+        self.screen.blit(s, (250, 150))
         
         # Draw icons
         self.screen.blit(self.icons['crop'], (360, 260))
         self.screen.blit(self.icons['silo'], (700, 30))
         
-        # Draw pest level indicator
+        # Pest meter
         self._draw_pest_meter(650, 150)
 
+    def _draw_grid(self):
+        """Draw the storage grid system"""
+        grid_width, grid_height = 300, 200
+        start_x, start_y = 250, 150
+        cell_width = grid_width // self.env.grid_size[1]
+        cell_height = grid_height // self.env.grid_size[0]
+        
+        for row in range(self.env.grid_size[0]):
+            for col in range(self.env.grid_size[1]):
+                x = start_x + col * cell_width
+                y = start_y + row * cell_height
+                
+                # Cell color based on zone risk
+                risk = self.env._get_zone_risk([row, col])
+                color = (
+                    int(255 * (1 - risk*0.7)),
+                    int(255 * (1 - risk*0.7)),
+                    100
+                )
+                pygame.draw.rect(self.screen, color, (x, y, cell_width, cell_height))
+                pygame.draw.rect(self.screen, self.colors['grid_line'], (x, y, cell_width, cell_height), 1)
+                
+                # Current position marker
+                if [row, col] == self.env.current_pos:
+                    self.screen.blit(self.icons['position'], 
+                                   (x + cell_width//2 - 15, y + cell_height//2 - 15))
+
     def _draw_pest_meter(self, x: int, y: int):
-        """Draw visual pest level indicator"""
+        """Draw pest level indicator"""
         # Background
         pygame.draw.rect(self.screen, (220, 220, 220), (x, y, 30, 200))
         
@@ -145,13 +165,12 @@ class StorageVisualizer:
                 self.screen.blit(value_text, (x - 40, y + i - 10))
 
     def _draw_status_panel(self):
-        """Draw the right-side status panel"""
-        # Panel background
+        """Draw right-side status panel"""
         pygame.draw.rect(self.screen, (230, 230, 230), (600, 400, 180, 180), border_radius=5)
         
-        # Status text
         texts = [
             f"Day: {self.env.day}/{self.env.config['max_days']}",
+            f"Pos: {self.env.current_pos}",
             f"Temp: {self.env.state['temp'][0]:.1f}°C",
             f"Humidity: {self.env.state['humidity'][0]:.1f}%",
             f"Crop: {self.env.CROP_TYPES[self.env.state['crop_type']]}",
@@ -160,17 +179,23 @@ class StorageVisualizer:
         
         for i, text in enumerate(texts):
             text_surface = self.font_small.render(text, True, self.colors['text'])
-            self.screen.blit(text_surface, (610, 410 + i * 25))
+            self.screen.blit(text_surface, (610, 410 + i * 22))
+            
+        # Recommended action
+        if hasattr(self.env, 'last_info'):
+            rec_text = f"Recommended: {self.env.last_info['recommended']}"
+            rec_surface = self.font_medium.render(rec_text, True, self.colors['recommendation'])
+            self.screen.blit(rec_surface, (610, 520))
 
     def _draw_action_history(self):
-        """Draw the action history at the bottom"""
+        """Draw action history at bottom"""
         if hasattr(self.env, 'last_action') and self.env.last_action is not None:
             action_text = f"Last Action: {self.env.ACTIONS[self.env.last_action]}"
             text_surface = self.font_large.render(action_text, True, self.colors['action'])
             self.screen.blit(text_surface, (50, 500))
 
     def _get_pest_color(self) -> Tuple[int, int, int]:
-        """Get color based on current pest level"""
+        """Get color based on pest level"""
         if self.env.pest_level < 0.3:
             return self.colors['safe']
         elif self.env.pest_level < 0.7:
@@ -185,7 +210,7 @@ class StorageVisualizer:
             self.frames.append(rgb_array)
 
     def _get_rgb_array(self) -> Optional[np.ndarray]:
-        """Get current frame as RGB array for video recording"""
+        """Get current frame as RGB array"""
         try:
             return np.transpose(
                 pygame.surfarray.array3d(self.screen),
@@ -199,7 +224,7 @@ class StorageVisualizer:
         return self._get_rgb_array()
 
     def save_gif(self, filename: Optional[str] = None):
-        """Save recorded frames as GIF (requires imageio)"""
+        """Save recorded frames as GIF"""
         if not self.frames:
             return
             

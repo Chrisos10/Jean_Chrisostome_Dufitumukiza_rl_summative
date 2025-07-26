@@ -6,12 +6,19 @@ import sys
 
 def run_continuous_environment(render_mode: str = 'human', max_episodes: int = None):
     """
-    Run the environment continuously with clean visualization.
+    Enhanced runner for the Farm Storage Optimization Environment
+    with full support for spatial grid system and recommendations
     """
     try:
         # Initialize environment
         env = StorageEnv(render_mode=render_mode)
-        print("Environment initialized successfully")
+        print("\n" + "="*50)
+        print("Farm Storage Optimization Simulation")
+        print("="*50)
+        print(f"Grid Size: {env.grid_size[0]}x{env.grid_size[1]}")
+        print(f"Available Actions: {len(env.ACTIONS)} actions")
+        print(f"Rendering Mode: {render_mode}")
+        print("Press Ctrl+C to stop\n")
 
         episode = 0
         
@@ -23,6 +30,10 @@ def run_continuous_environment(render_mode: str = 'human', max_episodes: int = N
             step = 0
             
             print(f"\n=== Episode {episode} ===")
+            print(f"Starting Position: {env.current_pos}")
+            print(f"Initial Pest Level: {env.pest_level:.1%}")
+            print(f"Initial Weather: {env.state['temp'][0]:.1f}°C, "
+                  f"{env.state['humidity'][0]:.1f}% humidity")
             
             while not terminated:
                 # Handle PyGame events
@@ -31,7 +42,7 @@ def run_continuous_environment(render_mode: str = 'human', max_episodes: int = N
                         if event.type == pygame.QUIT:
                             raise KeyboardInterrupt
                 
-                # Action selection (replace with your agent)
+                # Action selection (replace this with your agent)
                 action = env.action_space.sample()
                 
                 # Environment step
@@ -44,46 +55,58 @@ def run_continuous_environment(render_mode: str = 'human', max_episodes: int = N
                     env.render()
                     pygame.display.set_caption(
                         f"Farm Storage - Day {env.day} | "
+                        f"Pos: {env.current_pos} | "
                         f"Pest: {env.pest_level:.1%} | "
-                        f"Temp: {env.state['temp'][0]:.1f}°C"
+                        f"Temp: {env.state['temp'][0]:.1f}°C | "
+                        f"Reward: {total_reward:.1f}"
                     )
                 elif render_mode == 'console':
-                    env.render()
-                    time.sleep(0.1)  # Small delay for readability
+                    if step % 5 == 0 or terminated:  # Reduce console spam
+                        print(f"Day {env.day}: Pos {env.current_pos} | "
+                              f"Action: {env.ACTIONS[action]} | "
+                              f"Pest: {env.pest_level:.1%} | "
+                              f"Reward: {total_reward:.1f}")
+                        if 'recommended' in info:
+                            print(f"Recommended: {info['recommended']}")
+                    time.sleep(0.1)
                 
                 # Early termination if pests take over
                 if env.pest_level >= 0.95:
                     terminated = True
             
-            print(f"Completed in {env.day} days")
-            print(f"Final pest level: {env.pest_level:.1%}")
+            # Episode summary
+            print(f"\nEpisode {episode} completed in {env.day} days")
+            print(f"Final Position: {env.current_pos}")
+            print(f"Final Pest Level: {env.pest_level:.1%}")
+            print(f"Total Reward: {total_reward:.1f}")
+            print(f"Last Action: {info['action']}")
+            print(f"Recommended Action: {info['recommended']}")
             
-            # Brief pause between episodes
+            # Pause between episodes
             if render_mode == 'human':
-                time.sleep(0.5)
+                time.sleep(1.5)  # Longer pause to observe results
     
     except KeyboardInterrupt:
         print("\nSimulation stopped by user")
     except Exception as e:
-        print(f"Error: {str(e)}")
+        print(f"\nError: {str(e)}")
     finally:
         env.close()
         pygame.quit()
         sys.exit()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Farm Storage Environment')
+    parser = argparse.ArgumentParser(
+        description='Farm Storage Optimization Environment',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
     parser.add_argument('--render', type=str, default='human',
-                      choices=['human', 'console'], help='Rendering mode')
+                      choices=['human', 'console'], 
+                      help='Rendering mode (human=visual, console=text)')
     parser.add_argument('--episodes', type=int, default=None,
-                      help='Max episodes to run (None for infinite)')
+                      help='Maximum number of episodes to run (None for infinite)')
     
     args = parser.parse_args()
-    
-    print("Farm Storage Optimization Simulation")
-    print("-----------------------------------")
-    print(f"Rendering mode: {args.render}")
-    print("Press Ctrl+C to stop\n")
     
     run_continuous_environment(
         render_mode=args.render,
