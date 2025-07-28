@@ -81,14 +81,14 @@ class StorageEnv(gym.Env):
             'initial_pest': 0.1,
             'location': "Kigali",
             'grid_size': (5, 5),
-            'layout': 'custom'  # Changed default to 'custom'
+            'layout': 'custom'
         }
         
         self.render_mode = render_mode
         self.visualizer = None
         self.grid_size = self.config['grid_size']
         self.current_pos = [self.grid_size[0]//2, self.grid_size[1]//2]
-        self.time_in_risk_zone = 0  # Track cumulative risk exposure
+        self.time_in_risk_zone = 0
         
         # Initialize grid and visualization
         self._init_grid_states()
@@ -134,7 +134,6 @@ class StorageEnv(gym.Env):
                         self.grid_states[i,j] = 4
         
         elif self.config.get('layout') == 'custom':
-            # Custom pattern (R=Risk, V=Ventilated, O=Optimal, P=Protected)
             custom_pattern = [
                 [4, 2, 4, 4, 4],  # R V R R R
                 [0, 3, 2, 4, 2],  # O P V R V
@@ -143,7 +142,6 @@ class StorageEnv(gym.Env):
                 [4, 4, 2, 2, 3]   # R R V V P
             ]
             
-            # Apply the pattern to the grid
             for i in range(self.grid_size[0]):
                 for j in range(self.grid_size[1]):
                     self.grid_states[i,j] = custom_pattern[i][j]
@@ -173,7 +171,7 @@ class StorageEnv(gym.Env):
         except Exception:
             temp, humidity = 28.0, 65.0
 
-        self.state = {
+        observation = {
             "temp": np.array([temp], dtype=np.float32),
             "humidity": np.array([humidity], dtype=np.float32),
             "crop_type": random.randint(0, 2),
@@ -183,11 +181,12 @@ class StorageEnv(gym.Env):
             "position": np.array(self.current_pos, dtype=np.int32),
             "zone_type": self.grid_states[tuple(self.current_pos)]
         }
+        self.state = observation
 
         if self.render_mode == 'human' and self.visualizer:
             self.visualizer.reset()
             
-        return self._flatten_state(self.state), {}
+        return observation, {}
 
     def step(self, action):
         """Execute step with enhanced risk mechanics"""
@@ -233,7 +232,7 @@ class StorageEnv(gym.Env):
             "time_in_risk": float(self.time_in_risk_zone)
         }
 
-        return self._flatten_state(self.state), reward, terminated, truncated, info
+        return self.state, reward, terminated, truncated, info
 
     def _calculate_new_position(self, action):
         """Calculate new position after movement"""
@@ -351,10 +350,10 @@ class StorageEnv(gym.Env):
         # Crop susceptibility
         crop_factor = [0.8, 1.0, 1.2][self.state["crop_type"]]
         
-        # Zone risk modifier (Risk zone now 2.0x)
+        # Zone risk modifier
         zone_risk = {
             0: 0.5, 1: 0.8, 2: 0.7, 3: 0.9, 
-            4: 2.0  # Increased from 1.5 to 2.0
+            4: 2.0
         }[self.state["zone_type"]]
         
         daily_increase = (base_risk + temp_effect + humidity_effect + storage_risk) * crop_factor * zone_risk
@@ -367,19 +366,6 @@ class StorageEnv(gym.Env):
             self.day >= self.config['max_days'] or
             (self.last_action == 6)  # Harvest action
         )
-
-    def _flatten_state(self, state):
-        """Convert state to flat array"""
-        return np.concatenate([
-            state["temp"],
-            state["humidity"],
-            [state["crop_type"]],
-            [state["storage_method"]],
-            state["duration"],
-            state["pest_level"],
-            state["position"],
-            [state["zone_type"]]
-        ]).astype(np.float32)
 
     def _init_visualization(self):
         """Initialize visualization"""
