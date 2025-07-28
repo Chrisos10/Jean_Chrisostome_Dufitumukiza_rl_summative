@@ -7,19 +7,12 @@ from environment.rendering import StorageVisualizer
 from environment.my_weather import get_weather
 
 class StorageEnv(gym.Env):
-    """
-    Farm Storage Optimization Environment with Static State Zones
-    
-    Grid cells have permanent environmental state types (like Frozen Lake).
-    Agent must navigate to optimal zones and perform zone-specific interventions
-    based on current weather and crop conditions.
-    """
-    
+    """Farm Storage Environment with Enhanced Risk Mechanics"""
+
     # Constants
     CROP_TYPES = ["Maize", "Beans", "Rice"]
     STORAGE_METHODS = ["Silo", "Bags", "Traditional"]
     
-    # Static state types for grid cells
     STATE_TYPES = [
         {   # 0 - Optimal
             "name": "Optimal", 
@@ -29,7 +22,7 @@ class StorageEnv(gym.Env):
             "actions": [0, 5],  # Do nothing, reduce quantity
             "action_effects": {0: (0, 0.5), 5: (-0.05, 1.0)}
         },
-        {   # 1 - Cool Dry
+        {   # 1 - Cool Dry (not shown in legend)
             "name": "Cool Dry", 
             "color": (100, 200, 255),
             "ideal_temp": (15, 20), 
@@ -59,7 +52,7 @@ class StorageEnv(gym.Env):
             "ideal_temp": None, 
             "ideal_humidity": None,
             "actions": [4, 6],  # Emergency actions
-            "action_effects": {4: (-0.1, 1.0), 6: (0, 5.0)}
+            "action_effects": {4: (-0.1, 1.0), 6: (0, 5.0)}  # Big reward for harvest
         }
     ]
 
@@ -70,7 +63,7 @@ class StorageEnv(gym.Env):
         "Apply natural repellent",
         "Apply diatomaceous earth",
         "Reduce quantity",
-        "Immediate harvest/sell",
+        "Immediate harvest/sell",  # Emergency action
         "Move up",
         "Move down",
         "Move left",
@@ -87,23 +80,22 @@ class StorageEnv(gym.Env):
             'max_days': 30,
             'initial_pest': 0.1,
             'location': "Kigali",
-            'grid_size': (5, 5),  # rows, columns
-            'layout': 'cross'  # or 'random', 'rings'
+            'grid_size': (5, 5),
+            'layout': 'custom'  # Changed default to 'custom'
         }
         
         self.render_mode = render_mode
         self.visualizer = None
         self.grid_size = self.config['grid_size']
-        self.current_pos = [self.grid_size[0]//2, self.grid_size[1]//2]  # Start center
+        self.current_pos = [self.grid_size[0]//2, self.grid_size[1]//2]
+        self.time_in_risk_zone = 0  # Track cumulative risk exposure
         
-        # Initialize fixed grid states
+        # Initialize grid and visualization
         self._init_grid_states()
-        
-        # Initialize visualization
         if self.render_mode == 'human':
             self._init_visualization()
 
-        # Enhanced observation space
+        # Observation space
         self.observation_space = spaces.Dict({
             "temp": spaces.Box(0, 50, shape=(1,), dtype=np.float32),
             "humidity": spaces.Box(0, 100, shape=(1,), dtype=np.float32),
@@ -118,99 +110,69 @@ class StorageEnv(gym.Env):
         self.action_space = spaces.Discrete(11)
 
     def _init_grid_states(self):
-        """Initialize the fixed grid state layout based on config"""
+        """Initialize grid layout with custom pattern"""
         self.grid_states = np.zeros(self.grid_size, dtype=int)
         
         if self.config.get('layout') == 'random':
-            # Random distribution weighted by zone quality
-            probs = [0.3, 0.25, 0.25, 0.15, 0.05]  # Sum to 1.0
+            probs = [0.3, 0.25, 0.25, 0.15, 0.05]
             for i in range(self.grid_size[0]):
                 for j in range(self.grid_size[1]):
                     self.grid_states[i,j] = np.random.choice(len(self.STATE_TYPES), p=probs)
         
         elif self.config.get('layout') == 'rings':
-            # Concentric rings pattern
             center = (self.grid_size[0]//2, self.grid_size[1]//2)
             for i in range(self.grid_size[0]):
                 for j in range(self.grid_size[1]):
                     dist = max(abs(i-center[0]), abs(j-center[1]))
                     if dist == 0:
-                        self.grid_states[i,j] = 0  # Optimal center
+                        self.grid_states[i,j] = 0
                     elif dist == 1:
-                        self.grid_states[i,j] = random.choice([1, 2])  # Inner ring
+                        self.grid_states[i,j] = random.choice([1, 2])
                     elif dist == 2:
-                        self.grid_states[i,j] = 3  # Outer ring
+                        self.grid_states[i,j] = 3
                     else:
-                        self.grid_states[i,j] = 4  # Risk Zone edges
+                        self.grid_states[i,j] = 4
+        
+        elif self.config.get('layout') == 'custom':
+            # Custom pattern (R=Risk, V=Ventilated, O=Optimal, P=Protected)
+            custom_pattern = [
+                [4, 2, 4, 4, 4],  # R V R R R
+                [0, 3, 2, 4, 2],  # O P V R V
+                [4, 2, 0, 3, 4],  # R V O P R
+                [2, 4, 2, 0, 4],  # V R V O R
+                [4, 4, 2, 2, 3]   # R R V V P
+            ]
+            
+            # Apply the pattern to the grid
+            for i in range(self.grid_size[0]):
+                for j in range(self.grid_size[1]):
+                    self.grid_states[i,j] = custom_pattern[i][j]
         
         else:  # Default 'cross' layout
             center = self.grid_size[0]//2
             for i in range(self.grid_size[0]):
                 for j in range(self.grid_size[1]):
                     if i == center or j == center:
-                        # Central cross is optimal/ventilated
                         self.grid_states[i,j] = 0 if (i == center and j == center) else 2
                     else:
-                        # Corners are risk zones
                         self.grid_states[i,j] = 4 if random.random() < 0.7 else 3
 
-    def calculate_zone_suitability(self):
-        """
-        Calculate suitability score (0-1) for each zone based on:
-        - Current temperature and humidity
-        - Crop type preferences
-        - Zone's ideal conditions
-        """
-        scores = np.zeros(self.grid_size)
-        temp = self.state['temp'][0]
-        humidity = self.state['humidity'][0]
-        crop_type = self.state['crop_type']
-        
-        for i in range(self.grid_size[0]):
-            for j in range(self.grid_size[1]):
-                zone = self.STATE_TYPES[self.grid_states[i,j]]
-                
-                if zone['name'] == "Risk Zone":
-                    scores[i,j] = 0  # Always unsuitable
-                    continue
-                
-                # Temperature match (0-1 where 1 is perfect)
-                temp_mid = np.mean(zone['ideal_temp'])
-                temp_score = 1 - min(1, abs(temp - temp_mid) / 15)
-                
-                # Humidity match with crop adjustments
-                humidity_mid = np.mean(zone['ideal_humidity'])
-                humidity_base = 1 - min(1, abs(humidity - humidity_mid) / 30)
-                
-                # Crop-specific adjustments
-                if crop_type == 2:  # Rice prefers higher humidity
-                    humidity_score = min(1, humidity_base * 1.3)
-                elif crop_type == 0:  # Maize prefers moderate humidity
-                    humidity_score = humidity_base * 0.9
-                else:
-                    humidity_score = humidity_base
-                
-                # Combined score with weights
-                scores[i,j] = (temp_score * 0.6 + humidity_score * 0.4)
-                
-        return scores
-
     def reset(self, seed=None, options=None):
-        """Reset environment to initial state"""
+        """Reset environment with risk tracking"""
         super().reset(seed=seed)
         
         self.day = 0
         self.pest_level = self.config['initial_pest']
         self.current_pos = [self.grid_size[0]//2, self.grid_size[1]//2]
         self.last_action = None
+        self.time_in_risk_zone = 0
         
-        # Get weather data
+        # Initialize weather and state
         try:
             temp, humidity = get_weather(self.config['location'])
         except Exception:
             temp, humidity = 28.0, 65.0
 
-        # Initialize state
         self.state = {
             "temp": np.array([temp], dtype=np.float32),
             "humidity": np.array([humidity], dtype=np.float32),
@@ -228,7 +190,7 @@ class StorageEnv(gym.Env):
         return self._flatten_state(self.state), {}
 
     def step(self, action):
-        """Execute one environment step"""
+        """Execute step with enhanced risk mechanics"""
         assert self.action_space.contains(action), f"Invalid action {action}"
         
         reward = 0
@@ -236,14 +198,13 @@ class StorageEnv(gym.Env):
         truncated = False
         self.last_action = action
 
-        # Handle movement actions
-        if action >= 7:  # Movement actions (7-10)
+        # Handle movement
+        if action >= 7:
             new_pos = self._calculate_new_position(action)
             if new_pos != self.current_pos:
                 reward += self._calculate_movement_reward(new_pos)
                 self.current_pos = new_pos
         else:
-            # Handle zone-specific actions
             reward += self._handle_zone_action(action)
 
         # Daily updates
@@ -259,7 +220,7 @@ class StorageEnv(gym.Env):
             "zone_type": self.grid_states[tuple(self.current_pos)]
         })
 
-        # Check termination conditions
+        # Check termination
         terminated = self._check_termination()
         
         info = {
@@ -268,13 +229,14 @@ class StorageEnv(gym.Env):
             "position": tuple(self.current_pos),
             "zone_type": self.STATE_TYPES[self.state["zone_type"]]["name"],
             "suitability": float(self.calculate_zone_suitability()[tuple(self.current_pos)]),
-            "pest_level": float(self.pest_level)
+            "pest_level": float(self.pest_level),
+            "time_in_risk": float(self.time_in_risk_zone)
         }
 
         return self._flatten_state(self.state), reward, terminated, truncated, info
 
     def _calculate_new_position(self, action):
-        """Calculate new position after movement action"""
+        """Calculate new position after movement"""
         new_pos = self.current_pos.copy()
         if action == 7:  # Up
             new_pos[0] = max(0, new_pos[0]-1)
@@ -287,62 +249,94 @@ class StorageEnv(gym.Env):
         return new_pos
 
     def _calculate_movement_reward(self, new_pos):
-        """Calculate reward for moving to a new position"""
+        """Enhanced movement rewards with risk tracking"""
         target_zone = self.grid_states[tuple(new_pos)]
         suitability = self.calculate_zone_suitability()[tuple(new_pos)]
         
-        # Zone type base rewards
+        # Update risk time tracking
+        if target_zone == 4:
+            self.time_in_risk_zone += 1
+        else:
+            self.time_in_risk_zone = max(0, self.time_in_risk_zone - 0.5)
+        
+        # Zone rewards
         if target_zone == 4:  # Risk Zone
-            return -2
+            base_penalty = -2.0
+            time_penalty = -0.3 * self.time_in_risk_zone
+            return base_penalty + time_penalty
         elif target_zone == 0:  # Optimal
             return 1.5 if suitability > 0.8 else 0.5
-        
-        # Suitability-based rewards
-        if suitability > 0.7:
-            return 1.2
         elif suitability < 0.3:
-            return -0.5
-        return 0.3
+            return -0.7
+        return 0.5
 
     def _handle_zone_action(self, action):
-        """Handle non-movement actions with zone-specific effects"""
+        """Handle actions with emergency rewards"""
         zone_type = self.state["zone_type"]
         zone_info = self.STATE_TYPES[zone_type]
         
-        # Check if action is valid for this zone
         if action not in zone_info["actions"]:
-            return -1  # Penalty for invalid action
+            return -1.5  # Strong invalid action penalty
         
-        # Apply zone-specific effects
+        # Emergency harvest in risk zones
+        if action == 6 and zone_type == 4:
+            return 4.0  # Big reward
+        
+        # Normal effects
         pest_change, action_reward = zone_info["action_effects"][action]
         self.pest_level = np.clip(self.pest_level + pest_change, 0, 1)
-        
-        # Additional effects for specific actions
-        if action == 1:  # Increase ventilation
-            self.state["temp"][0] = max(10, self.state["temp"][0] - 1)
-            self.state["humidity"][0] = max(30, self.state["humidity"][0] - 2)
-        elif action == 2:  # Decrease ventilation
-            self.state["temp"][0] = min(40, self.state["temp"][0] + 1)
-            self.state["humidity"][0] = min(90, self.state["humidity"][0] + 3)
-            
         return action_reward
 
+    def calculate_zone_suitability(self):
+        """Calculate suitability scores (0-1) for all zones"""
+        scores = np.zeros(self.grid_size)
+        temp = self.state['temp'][0]
+        humidity = self.state['humidity'][0]
+        crop_type = self.state['crop_type']
+        
+        for i in range(self.grid_size[0]):
+            for j in range(self.grid_size[1]):
+                zone = self.STATE_TYPES[self.grid_states[i,j]]
+                
+                if zone['name'] == "Risk Zone":
+                    scores[i,j] = 0
+                    continue
+                
+                # Temperature match
+                temp_mid = np.mean(zone['ideal_temp'])
+                temp_score = 1 - min(1, abs(temp - temp_mid) / 15)
+                
+                # Humidity match with crop adjustments
+                humidity_mid = np.mean(zone['ideal_humidity'])
+                humidity_base = 1 - min(1, abs(humidity - humidity_mid) / 30)
+                
+                if crop_type == 2:  # Rice
+                    humidity_score = min(1, humidity_base * 1.3)
+                elif crop_type == 0:  # Maize
+                    humidity_score = humidity_base * 0.9
+                else:
+                    humidity_score = humidity_base
+                
+                scores[i,j] = (temp_score * 0.6 + humidity_score * 0.4)
+                
+        return scores
+
     def _simulate_weather_change(self):
-        """Simulate daily weather fluctuations"""
+        """Daily weather fluctuations"""
         temp_change = random.uniform(-2, 2)
         humidity_change = random.uniform(-5, 5)
         
         self.state["temp"] = np.clip(
             self.state["temp"] + temp_change,
-            10, 40  # realistic temp range
+            10, 40
         )
         self.state["humidity"] = np.clip(
             self.state["humidity"] + humidity_change,
-            30, 90  # realistic humidity range
+            30, 90
         )
 
     def _update_pest_level(self):
-        """Calculate daily pest level changes"""
+        """Pest growth with enhanced risk zone effects"""
         base_risk = 0.05
         temp = self.state["temp"][0]
         humidity = self.state["humidity"][0]
@@ -357,28 +351,25 @@ class StorageEnv(gym.Env):
         # Crop susceptibility
         crop_factor = [0.8, 1.0, 1.2][self.state["crop_type"]]
         
-        # Zone risk modifier
+        # Zone risk modifier (Risk zone now 2.0x)
         zone_risk = {
-            0: 0.5,  # Optimal zones reduce risk
-            1: 0.8,
-            2: 0.7,
-            3: 0.9,
-            4: 1.5   # Risk zones increase danger
+            0: 0.5, 1: 0.8, 2: 0.7, 3: 0.9, 
+            4: 2.0  # Increased from 1.5 to 2.0
         }[self.state["zone_type"]]
         
         daily_increase = (base_risk + temp_effect + humidity_effect + storage_risk) * crop_factor * zone_risk
         self.pest_level = np.clip(self.pest_level + daily_increase, 0, 1)
 
     def _check_termination(self):
-        """Check if episode should terminate"""
+        """Termination conditions"""
         return (
-            self.pest_level >= 1.0 or  # Complete infestation
-            self.day >= self.config['max_days'] or  # Season ended
+            self.pest_level >= 1.0 or
+            self.day >= self.config['max_days'] or
             (self.last_action == 6)  # Harvest action
         )
 
     def _flatten_state(self, state):
-        """Convert state dict to flat array for RL algorithms"""
+        """Convert state to flat array"""
         return np.concatenate([
             state["temp"],
             state["humidity"],
@@ -391,7 +382,7 @@ class StorageEnv(gym.Env):
         ]).astype(np.float32)
 
     def _init_visualization(self):
-        """Initialize PyGame visualization"""
+        """Initialize visualization"""
         try:
             self.visualizer = StorageVisualizer(self)
         except ImportError as e:
@@ -400,7 +391,7 @@ class StorageEnv(gym.Env):
             self.render_mode = 'console'
 
     def render(self):
-        """Render the environment"""
+        """Render environment"""
         if self.render_mode == 'human' and self.visualizer:
             return self.visualizer.render()
         elif self.render_mode == 'console' or self.render_mode is None:
@@ -412,7 +403,7 @@ class StorageEnv(gym.Env):
             return np.zeros((600, 800, 3), dtype=np.uint8)
 
     def _console_render(self):
-        """Text-based rendering for console"""
+        """Text-based rendering"""
         print(f"\n=== Day {self.day}/{self.config['max_days']} ===")
         print(f"Position: {self.current_pos} | Zone: {self.STATE_TYPES[self.state['zone_type']]['name']}")
         print(f"Temp: {self.state['temp'][0]:.1f}°C | Humidity: {self.state['humidity'][0]:.1f}%")
@@ -423,9 +414,9 @@ class StorageEnv(gym.Env):
         
         if hasattr(self, 'last_action'):
             print(f"Last Action: {self.ACTIONS[self.last_action]}")
-            print(f"Suitability: {self.calculate_zone_suitability()[tuple(self.current_pos)]:.2f}")
+            print(f"Time in Risk: {self.time_in_risk_zone:.1f} steps")
 
     def close(self):
-        """Clean up resources"""
+        """Cleanup"""
         if self.visualizer:
             self.visualizer.close()
