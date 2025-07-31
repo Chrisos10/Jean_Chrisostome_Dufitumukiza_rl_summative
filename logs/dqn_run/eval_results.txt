@@ -1,0 +1,53 @@
+=== DQN Evaluation Results ===
+Mean Reward: 117.095 ± 0.562
+Mean Episode Length: 30.0 steps
+Mean Final Pest Level: 0.112
+Success Rate (Pest < 0.8): 100.0%
+Training Time: 449.81 seconds
+Total Timesteps: 150000
+Final Exploration Rate: 0.050
+
+Action Usage Distribution:
+Action 0 (Monitor and maintain): 0 times (0.0%)
+Action 1 (Increase ventilation): 0 times (0.0%)
+Action 2 (Reduce ventilation): 0 times (0.0%)
+Action 3 (Add moisture absorbers): 0 times (0.0%)
+Action 4 (Add controlled moisture): 0 times (0.0%)
+Action 5 (Solar drying): 0 times (0.0%)
+Action 6 (Temperature regulation): 0 times (0.0%)
+Action 7 (Apply neem treatment): 0 times (0.0%)
+Action 8 (Moisture level control): 0 times (0.0%)
+Action 9 (Apply wood ash): 0 times (0.0%)
+Action 10 (Use aromatic herbs): 0 times (0.0%)
+Action 11 (Apply diatomaceous earth): 0 times (0.0%)
+Action 12 (Use sealed containers): 0 times (0.0%)
+Action 13 (Intensive natural treatment): 0 times (0.0%)
+Action 14 (Remove affected portions): 0 times (0.0%)
+Action 15 (Emergency harvest): 0 times (0.0%)
+Action 16 (Integrated pest management): 580 times (96.7%)
+Action 17 (Move up): 20 times (3.3%)
+Action 18 (Move down): 0 times (0.0%)
+Action 19 (Move left): 0 times (0.0%)
+Action 20 (Move right): 0 times (0.0%)
+
+Individual Episode Results:
+Episode 1: Reward=116.32, Length=30, Final Pest=0.121
+Episode 2: Reward=117.55, Length=30, Final Pest=0.030
+Episode 3: Reward=117.57, Length=30, Final Pest=0.057
+Episode 4: Reward=117.82, Length=30, Final Pest=0.076
+Episode 5: Reward=117.91, Length=30, Final Pest=0.042
+Episode 6: Reward=116.59, Length=30, Final Pest=0.070
+Episode 7: Reward=116.73, Length=30, Final Pest=0.058
+Episode 8: Reward=115.95, Length=30, Final Pest=0.311
+Episode 9: Reward=116.86, Length=30, Final Pest=0.114
+Episode 10: Reward=117.22, Length=30, Final Pest=0.217
+Episode 11: Reward=117.56, Length=30, Final Pest=0.137
+Episode 12: Reward=116.78, Length=30, Final Pest=0.058
+Episode 13: Reward=116.32, Length=30, Final Pest=0.060
+Episode 14: Reward=116.67, Length=30, Final Pest=0.241
+Episode 15: Reward=117.13, Length=30, Final Pest=0.048
+Episode 16: Reward=117.63, Length=30, Final Pest=0.069
+Episode 17: Reward=117.23, Length=30, Final Pest=0.045
+Episode 18: Reward=116.68, Length=30, Final Pest=0.228
+Episode 19: Reward=117.61, Length=30, Final Pest=0.120
+Episode 20: Reward=117.79, Length=30, Final Pest=0.138

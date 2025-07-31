@@ -1,0 +1,22 @@
+Action_Index,Action_Name,Count,Percentage
+0,Monitor and maintain,0,0.0
+1,Increase ventilation,0,0.0
+2,Reduce ventilation,0,0.0
+3,Add moisture absorbers,0,0.0
+4,Add controlled moisture,0,0.0
+5,Solar drying,0,0.0
+6,Temperature regulation,0,0.0
+7,Apply neem treatment,0,0.0
+8,Moisture level control,0,0.0
+9,Apply wood ash,0,0.0
+10,Use aromatic herbs,0,0.0
+11,Apply diatomaceous earth,0,0.0
+12,Use sealed containers,0,0.0
+13,Intensive natural treatment,0,0.0
+14,Remove affected portions,0,0.0
+15,Emergency harvest,0,0.0
+16,Integrated pest management,580,96.66666666666667
+17,Move up,20,3.3333333333333335
+18,Move down,0,0.0
+19,Move left,0,0.0
+20,Move right,0,0.0

@@ -1,0 +1,17 @@
+=== A2C Evaluation Results ===
+Mean Reward: 53.829 ± 8.658
+Mean Episode Length: 29.6 steps
+Mean Final Pest Level: 0.210
+Success Rate (Pest < 0.8): 80.0%
+
+Individual Episode Results:
+Episode 1: Reward=58.52, Length=30, Final Pest=0.040
+Episode 2: Reward=58.09, Length=30, Final Pest=0.014
+Episode 3: Reward=58.88, Length=30, Final Pest=0.014
+Episode 4: Reward=55.87, Length=30, Final Pest=0.051
+Episode 5: Reward=47.18, Length=30, Final Pest=0.898
+Episode 6: Reward=29.78, Length=26, Final Pest=0.997
+Episode 7: Reward=56.59, Length=30, Final Pest=0.031
+Episode 8: Reward=56.54, Length=30, Final Pest=0.012
+Episode 9: Reward=58.66, Length=30, Final Pest=0.012
+Episode 10: Reward=58.17, Length=30, Final Pest=0.025
