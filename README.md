@@ -8,10 +8,9 @@ Throughtout this project, a custom Reinforcement Learning environment simulating
 
 This system not only trains agents to make real-time decisions but also offers visual explanations and adaptive strategies based on the storage environment.
 
-## Demo
+#### Demo
 
-[![Watch the video](https://drive.google.com/file/d/1gddwCn-aW05aWHdsmZCRPc7tRKPo9XGk/view?usp=sharing)](https://drive.google.com/file/d/1gddwCn-aW05aWHdsmZCRPc7tRKPo9XGk/view?usp=sharing)
-
+[📹 Click to view demo video](./demo.mp4)
 ---
 
 ## Custom Environment Description
