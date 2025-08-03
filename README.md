@@ -10,8 +10,7 @@ This system not only trains agents to make real-time decisions but also offers v
 
 ## Demo
 
-[![Watch the video](https://drive.google.com/file/d/1gddwCn-aW05aWHdsmZCRPc7tRKPo9XGk/view?usp=sharing)](https://drive.google.com/file/d/1gddwCn-aW05aWHdsmZCRPc7tRKPo9XGk/view?usp=sharing)
-
+Link to demo vide: https://drive.google.com/file/d/1gddwCn-aW05aWHdsmZCRPc7tRKPo9XGk/view?usp=sharing
 ---
 
 ## Custom Environment Description
