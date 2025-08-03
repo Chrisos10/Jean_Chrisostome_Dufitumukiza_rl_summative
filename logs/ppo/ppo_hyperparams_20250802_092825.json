@@ -1,0 +1,32 @@
+{
+  "hyperparameters": {
+    "learning_rate": 0.0003,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "clip_range": 0.15,
+    "clip_range_vf": 0.2,
+    "ent_coef": 0.03,
+    "vf_coef": 0.5,
+    "max_grad_norm": 0.5,
+    "n_steps": 2048,
+    "batch_size": 64,
+    "n_epochs": 10,
+    "target_kl": 0.01,
+    "policy_kwargs": {
+      "net_arch_policy": [
+        256,
+        256
+      ],
+      "net_arch_value": [
+        256,
+        256
+      ],
+      "activation_fn": "Tanh"
+    },
+    "verbose": 1,
+    "seed": 42
+  },
+  "total_timesteps": 350000,
+  "training_time_seconds": 1008.907265,
+  "timestamp": "20250802_092825"
+}

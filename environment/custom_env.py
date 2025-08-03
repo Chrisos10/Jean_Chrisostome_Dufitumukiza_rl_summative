@@ -2,13 +2,12 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import random
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, List
 from environment.rendering import StorageVisualizer
-from environment.my_weather import get_weather
 import cv2
 
 class StorageEnv(gym.Env):
-    """Enhanced Farm Storage Environment with improved learning dynamics"""
+    """A Farm Storage Environment consisted of Condition Analysis & Navigation Learning, and Treatment Application"""
 
     # Constants
     CROP_TYPES = ["Maize", "Beans", "Rice"]
@@ -20,71 +19,45 @@ class StorageEnv(gym.Env):
             "color": (100, 255, 100),
             "ideal_temp": (18, 25), 
             "ideal_humidity": (60, 70),
+            "ideal_pest": (0.0, 0.2),
             "description": "Perfect balanced conditions - maintain with minimal intervention",
             "actions": [0, 6, 7],  # Monitor, temperature control, preventive neem
-            "action_effects": {
-                0: (-0.005, 0.8),    # Just monitoring - very stable conditions
-                6: (-0.01, 0.6),     # Fine-tune temperature to maintain perfection
-                7: (-0.015, 1.0)     # Preventive neem application
-            }
         },
         {   # 1 - Too Dry (Low humidity, may cause grain brittleness)
             "name": "Too Dry", 
             "color": (100, 200, 255),
-            "ideal_temp": (15, 22), 
-            "ideal_humidity": (35, 50),
+            "ideal_temp": (15, 30), 
+            "ideal_humidity": (30, 50),
+            "ideal_pest": (0.0, 0.3),
             "description": "Dangerously low humidity - grain may crack, dust increases pest attraction",
             "actions": [2, 4, 8, 12],  # Reduce ventilation, add controlled moisture, moisture control, sealed containers
-            "action_effects": {
-                2: (-0.02, 0.7),     # Reduce ventilation to retain moisture
-                4: (-0.04, 1.2),     # Add controlled moisture - critical here
-                8: (-0.03, 0.9),     # General moisture management
-                12: (-0.05, 1.1)     # Sealed containers prevent further moisture loss
-            }
         },
         {   # 2 - Well Ventilated
             "name": "Well Ventilated", 
             "color": (200, 255, 200),
-            "ideal_temp": (18, 28), 
-            "ideal_humidity": (55, 65),
+            "ideal_temp": (20, 32), 
+            "ideal_humidity": (50, 70),
+            "ideal_pest": (0.0, 0.4),
             "description": "Excellent airflow - perfect for preventing mold and fungal issues",
             "actions": [0, 1, 5, 10],  # Monitor, increase ventilation, solar drying, aromatic herbs
-            "action_effects": {
-                0: (-0.01, 0.5),     # Natural air circulation is working well
-                1: (-0.08, 1.3),     # Increase ventilation - very effective here
-                5: (-0.06, 1.0),     # Solar drying complements ventilation
-                10: (-0.07, 1.1)     # Aromatic herbs work excellently with air circulation
-            }
         },
         {   # 3 - High Humidity
             "name": "High Humidity", 
             "color": (255, 255, 100),
-            "ideal_temp": (22, 30), 
-            "ideal_humidity": (75, 90),
+            "ideal_temp": (15, 35), 
+            "ideal_humidity": (70, 90),
+            "ideal_pest": (0.0, 0.6),
             "description": "Dangerous moisture levels - mold and fungal growth imminent",
             "actions": [1, 3, 5, 9, 11],  # Increase ventilation, moisture absorbers, solar drying, ash, DE
-            "action_effects": {
-                1: (-0.10, 1.5),     # Ventilation critical for humidity
-                3: (-0.12, 1.8),     # Moisture absorbers essential
-                5: (-0.15, 2.0),     # Solar drying very effective
-                9: (-0.08, 1.2),     # Wood ash absorbs moisture and deters pests
-                11: (-0.18, 2.2)     # DE works well in humid conditions
-            }
         },
         {   # 4 - Critical Risk Zone
             "name": "Critical Risk", 
             "color": (255, 50, 50),
-            "ideal_temp": None, 
-            "ideal_humidity": None,
+            "ideal_temp": (0, 50), 
+            "ideal_humidity": (0, 100),
+            "ideal_pest": (0.5, 1.0),
             "description": "EMERGENCY: Active pest infestation or severe environmental damage detected",
             "actions": [11, 13, 14, 15, 16],  # Emergency protocols only
-            "action_effects": {
-                11: (-0.25, 2.0),    # Diatomaceous earth - immediate pest control
-                13: (-0.35, 3.0),    # Multi-method emergency treatment
-                14: (-0.20, 2.5),    # Remove infected portions immediately
-                15: (-0.05, 5.0),    # Emergency harvest to save what's left
-                16: (-0.40, 3.5)     # Full integrated emergency response
-            }
         }
     ]
 
@@ -109,7 +82,33 @@ class StorageEnv(gym.Env):
         "Move up",                       # 17
         "Move down",                     # 18
         "Move left",                     # 19
-        "Move right"                     # 20
+        "Move right",                    # 20
+        "Read conditions"                # 21 - Analyze current conditions
+    ]
+
+    # GROUND TRUTH MAPPING: Condition ranges to correct zone
+    CONDITION_ZONE_MAPPING = [
+        # Format: (temp_min, temp_max, humidity_min, humidity_max, pest_min, pest_max) -> zone_index
+        
+        # OPTIMAL STORAGE CONDITIONS
+        (18, 25, 60, 70, 0.0, 0.2, 0),  # Perfect conditions → Optimal Storage
+        (20, 24, 62, 68, 0.0, 0.15, 0), # Even more perfect → Optimal Storage
+        
+        # TOO DRY CONDITIONS
+        (15, 30, 30, 50, 0.0, 0.3, 1),  # Low humidity → Too Dry
+        (25, 35, 35, 45, 0.1, 0.25, 1), # Hot and dry → Too Dry
+        
+        # WELL VENTILATED CONDITIONS
+        (20, 32, 50, 70, 0.0, 0.4, 2),  # Good airflow conditions → Well Ventilated
+        (22, 28, 55, 65, 0.1, 0.3, 2),  # Moderate conditions → Well Ventilated
+        
+        # HIGH HUMIDITY CONDITIONS
+        (15, 35, 70, 90, 0.0, 0.6, 3),  # High moisture → High Humidity
+        (28, 35, 75, 85, 0.2, 0.5, 3),  # Hot and humid → High Humidity
+        
+        # CRITICAL RISK CONDITIONS
+        (0, 50, 0, 100, 0.5, 1.0, 4),   # High pest level → Critical Risk
+        (35, 50, 80, 100, 0.3, 1.0, 4), # Extreme conditions → Critical Risk
     ]
     
     metadata = {'render.modes': ['human', 'rgb_array', 'console']}
@@ -118,12 +117,15 @@ class StorageEnv(gym.Env):
         super().__init__()
         
         self.config = config or {
-            'max_days': 30,
+            'max_steps': 20,  # 20 for better exploration
             'initial_pest': 0.1,
             'location': "Kigali",
             'grid_size': (5, 5),
             'layout': 'custom',
-            'obs_type': 'multi'
+            'obs_type': 'multi',
+            'curriculum_stage': 1,  # 1=easy, 2=medium, 3=full
+            'use_action_masking': True,  # Enabled action masking
+            'intermediate_rewards': True  # Enabled intermediate navigation rewards
         }
         
         self.obs_type = self.config.get('obs_type', obs_type)
@@ -131,25 +133,37 @@ class StorageEnv(gym.Env):
         self.visualizer = None
         self.grid_size = self.config['grid_size']
         self.current_pos = [self.grid_size[0]//2, self.grid_size[1]//2]
-        self.time_in_risk_zone = 0
-        self.visited_positions = set()
-        self.last_action = None
         self.step_count = 0
         
-        # Learning enhancement variables
-        self.cumulative_reward = 0
-        self.best_pest_level = 1.0
-        self.exploration_bonus = 0
+        # Episode phase tracking with enhanced progress monitoring
+        self.episode_phase = "ANALYZE"  # ANALYZE -> NAVIGATE -> TREAT -> END
+        self.has_read_conditions = False
+        self.target_zone = None
+        self.chosen_zone = None
+        self.conditions_analyzed = False
+        
+        # Episode progress tracking for intermediate rewards
+        self.episode_progress = {
+            'conditions_read': False,
+            'started_navigation': False,
+            'reached_any_zone': False,
+            'reached_target_zone': False,
+            'applied_treatment': False
+        }
+        
+        # Distance tracking for navigation rewards
+        self.previous_distance_to_target = None
+        self.best_distance_to_target = float('inf')
         
         self._init_grid_states()
         if self.render_mode == 'human':
             self._init_visualization()
 
-        # Updated observation spaces to account for new action count
+        # Enhanced observation space with phase encoding
         if self.obs_type == "mlp":
             self.observation_space = spaces.Box(
                 low=-10, high=100, 
-                shape=(12,),
+                shape=(13,),
                 dtype=np.float32
             )
         elif self.obs_type == "cnn":
@@ -158,113 +172,372 @@ class StorageEnv(gym.Env):
                 shape=(64, 64, 3),
                 dtype=np.uint8
             )
-        else:  # multi
+        else:  # multi-Input Policy
             self.observation_space = spaces.Dict({
-                "vector": spaces.Box(low=-10, high=100, shape=(12,), dtype=np.float32),
-                "image": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8)
+                "vector": spaces.Box(low=-10, high=100, shape=(13,), dtype=np.float32),
+                "image": spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8),
+                "action_mask": spaces.Box(low=0, high=1, shape=(len(self.ACTIONS),), dtype=np.int8)
             })
 
         self.action_space = spaces.Discrete(len(self.ACTIONS))
 
     def _init_grid_states(self):
-        """Initialize grid with dynamic risk zone placement based on training phase"""
-        self.grid_states = np.zeros(self.grid_size, dtype=int)
+        """Create a grid with all 5 zone types"""
+        self.grid_states = np.full(self.grid_size, -1, dtype=int)
         
-        # Get curriculum level (0=easy, 1=medium, 2=hard, 3=expert)
-        curriculum_level = self.config.get('curriculum_level', 1)
+        rows, cols = self.grid_size
         
-        if self.config.get('layout') == 'custom':
-            if curriculum_level == 0:  # Easy: Mostly optimal and ventilated zones
-                custom_pattern = [
-                    [2, 0, 3, 2, 0],
-                    [0, 3, 2, 0, 2],
-                    [3, 2, 0, 3, 2],
-                    [2, 0, 2, 0, 1],
-                    [1, 3, 4, 2, 4]  # Two risk zones to test
-                ]
-            elif curriculum_level == 1:  # Medium: Mix of conditions with some challenges
-                custom_pattern = [
-                    [4, 2, 1, 3, 2],
-                    [0, 3, 4, 1, 2],
-                    [3, 2, 0, 3, 4],
-                    [2, 4, 2, 0, 1],
-                    [1, 3, 4, 2, 3]
-                ]
-            elif curriculum_level == 2:  # Hard: More challenging conditions
-                custom_pattern = [
-                    [4, 2, 4, 3, 2],
-                    [1, 4, 2, 4, 3],
-                    [4, 3, 0, 3, 4],
-                    [2, 4, 3, 4, 1],
-                    [4, 3, 4, 2, 4]
-                ]
-            else:  # Expert: Maximum challenge
-                custom_pattern = [
-                    [4, 4, 4, 4, 4],
-                    [4, 3, 2, 3, 4],
-                    [4, 2, 0, 2, 4],
-                    [4, 3, 2, 3, 4],
-                    [4, 4, 4, 4, 4]
-                ]
-            
-            for i in range(self.grid_size[0]):
-                for j in range(self.grid_size[1]):
-                    if i < len(custom_pattern) and j < len(custom_pattern[i]):
-                        self.grid_states[i,j] = custom_pattern[i][j]
+        # Placing all 5 zones in corners and center
+        zone_positions = [
+            (0, 0),                 # Top-left - Optimal Storage
+            (0, cols-1),            # Top-right - Too Dry  
+            (rows-1, 0),            # Bottom-left - Ventilated
+            (rows-1, cols-1),       # Bottom-right - High Humidity
+            (rows//2, cols//2)      # Critical Risk in center
+        ]
+        
+        for idx, pos in enumerate(zone_positions):
+            if idx < len(self.STATE_TYPES):
+                self.grid_states[pos] = idx
+
+    def _get_empty_positions(self):
+        """Get all empty grid positions (where grid_states == -1)"""
+        empty_positions = []
+        rows, cols = self.grid_size
+        
+        for row in range(rows):
+            for col in range(cols):
+                if self.grid_states[row, col] == -1:  # Empty cell
+                    empty_positions.append([row, col])
+        
+        return empty_positions
+
+    def _get_adjacent_empty_positions(self, target_pos: List[int]) -> List[List[int]]:
+        """Get empty positions adjacent to target position"""
+        adjacent_positions = []
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:  # Up, Down, Left, Right
+            new_row, new_col = target_pos[0] + dr, target_pos[1] + dc
+            if (0 <= new_row < self.grid_size[0] and 
+                0 <= new_col < self.grid_size[1] and 
+                self.grid_states[new_row, new_col] == -1):
+                adjacent_positions.append([new_row, new_col])
+        return adjacent_positions
+
+    #Defining agent starting position
+    def _get_random_empty_position(self):
+        """Get a random empty position from available empty cells"""
+        empty_positions = self._get_empty_positions()
+        
+        if not empty_positions:
+            # Fallback: if no empty positions, use center
+            print("Warning: No empty positions available, using center")
+            return [self.grid_size[0]//2, self.grid_size[1]//2]
+        
+        return random.choice(empty_positions)
+
+    def _get_curriculum_start_position(self) -> List[int]:
+        """Get starting position based on curriculum stage"""
+        curriculum_stage = self.config.get('curriculum_stage', 1)
+        
+        if curriculum_stage == 1:  # Easy: Start adjacent to target zone
+            target_positions = np.where(self.grid_states == self.target_zone)
+            if len(target_positions[0]) > 0:
+                target_pos = [target_positions[0][0], target_positions[1][0]]
+                adjacent_positions = self._get_adjacent_empty_positions(target_pos)
+                if adjacent_positions:
+                    return random.choice(adjacent_positions)
+        
+        elif curriculum_stage == 2:  # Medium: Start within 2 steps of target
+            target_positions = np.where(self.grid_states == self.target_zone)
+            if len(target_positions[0]) > 0:
+                target_pos = [target_positions[0][0], target_positions[1][0]]
+                nearby_positions = []
+                for empty_pos in self._get_empty_positions():
+                    distance = abs(empty_pos[0] - target_pos[0]) + abs(empty_pos[1] - target_pos[1])
+                    if distance <= 2:
+                        nearby_positions.append(empty_pos)
+                if nearby_positions:
+                    return random.choice(nearby_positions)
+        
+        # Stage 3 (full) or fallback: Random empty position
+        return self._get_random_empty_position()
+
+    def _determine_correct_zone(self, temp: float, humidity: float, pest: float) -> int:
+        """Determine the correct zone based on current conditions using ground truth mapping"""
+        for temp_min, temp_max, hum_min, hum_max, pest_min, pest_max, zone_idx in self.CONDITION_ZONE_MAPPING:
+            if (temp_min <= temp <= temp_max and 
+                hum_min <= humidity <= hum_max and 
+                pest_min <= pest <= pest_max):
+                return zone_idx
+        
+        # Fallback logic if no exact match
+        if pest >= 0.5:
+            return 4  # Critical Risk
+        elif humidity >= 70:
+            return 3  # High Humidity
+        elif humidity <= 50:
+            return 1  # Too Dry
+        elif 20 <= temp <= 32:
+            return 2  # Well Ventilated
         else:
-            # Dynamic layout based on curriculum
-            risk_probability = [0.15, 0.25, 0.4, 0.6][curriculum_level]
-            center = self.grid_size[0]//2
-            
-            for i in range(self.grid_size[0]):
-                for j in range(self.grid_size[1]):
-                    if i == center and j == center:
-                        self.grid_states[i,j] = 0  # Start optimal
-                    elif random.random() < risk_probability:
-                        self.grid_states[i,j] = 4  # Risk zone
-                    else:
-                        if curriculum_level >= 2:
-                            self.grid_states[i,j] = random.choices([1, 2, 3], weights=[0.4, 0.4, 0.2])[0]
-                        else:
-                            self.grid_states[i,j] = random.randint(0, 3)
+            return 0  # Optimal Storage
+
+    def _calculate_distance_to_target(self) -> float:
+        """Calculate Manhattan distance to target zone"""
+        if self.target_zone is None:
+            return 0.0
+        
+        target_positions = np.where(self.grid_states == self.target_zone)
+        if len(target_positions[0]) == 0:
+            return 0.0
+        
+        min_distance = float('inf')
+        for target_row, target_col in zip(target_positions[0], target_positions[1]):
+            distance = abs(self.current_pos[0] - target_row) + abs(self.current_pos[1] - target_col)
+            min_distance = min(min_distance, distance)
+        
+        return min_distance
+
+    def get_valid_actions(self) -> List[int]:
+        """Get valid actions based on current phase (for action masking)"""
+        if not self.config.get('use_action_masking', False):
+            return list(range(len(self.ACTIONS)))
+        
+        if self.episode_phase == "ANALYZE":
+            return [21]  # Only read conditions
+        
+        elif self.episode_phase == "NAVIGATE":
+            return [17, 18, 19, 20]  # Only movement actions
+        
+        elif self.episode_phase == "TREAT":
+            current_zone = self.grid_states[tuple(self.current_pos)]
+            if current_zone != -1:
+                return self.STATE_TYPES[current_zone]["actions"]
+            return []
+        
+        return list(range(len(self.ACTIONS)))
+
+    def _get_action_mask(self) -> np.ndarray:
+        """Get action mask for current state"""
+        mask = np.zeros(len(self.ACTIONS), dtype=np.int8)
+        valid_actions = self.get_valid_actions()
+        mask[valid_actions] = 1
+        return mask
 
     def reset(self, seed=None, options=None):
-        """Reset with better initialization"""
+        """Reset with enhanced curriculum learning and progress tracking"""
         super().reset(seed=seed)
         
-        self.day = 0
-        self.pest_level = self.config['initial_pest']
-        self.current_pos = [self.grid_size[0]//2, self.grid_size[1]//2]
-        self.last_action = None
-        self.time_in_risk_zone = 0
-        self.visited_positions = {tuple(self.current_pos)}
         self.step_count = 0
-        self.cumulative_reward = 0
-        self.best_pest_level = 1.0
-        self.exploration_bonus = 0
+        self.episode_phase = "ANALYZE"
+        self.has_read_conditions = False
+        self.conditions_analyzed = False
+        self.chosen_zone = None
         
-        try:
-            temp, humidity = get_weather(self.config['location'])
-        except Exception:
-            temp, humidity = 25.0, 65.0
-
+        # Reset progress tracking
+        self.episode_progress = {
+            'conditions_read': False,
+            'started_navigation': False,
+            'reached_any_zone': False,
+            'reached_target_zone': False,
+            'applied_treatment': False
+        }
+        
+        # Generate random conditions
+        self.temp = random.uniform(15, 40)
+        self.humidity = random.uniform(30, 90)
+        self.pest_level = random.uniform(0.0, 0.8)
+        
+        # Determine the correct zone for these conditions
+        self.target_zone = self._determine_correct_zone(self.temp, self.humidity, self.pest_level)
+        
+        # Use curriculum-based starting position
+        self.current_pos = self._get_curriculum_start_position()
+        
+        # Initialize distance tracking
+        self.previous_distance_to_target = self._calculate_distance_to_target()
+        self.best_distance_to_target = self.previous_distance_to_target
+        
+        # Initialize state
         self.state = {
-            "temp": np.array([temp], dtype=np.float32),
-            "humidity": np.array([humidity], dtype=np.float32),
+            "temp": np.array([self.temp], dtype=np.float32),
+            "humidity": np.array([self.humidity], dtype=np.float32),
             "crop_type": random.randint(0, 2),
             "storage_method": random.randint(0, 2),
-            "duration": np.array([0], dtype=np.float32),
             "pest_level": np.array([self.pest_level], dtype=np.float32),
             "position": np.array(self.current_pos, dtype=np.int32),
             "zone_type": self.grid_states[tuple(self.current_pos)],
-            "nearby_zones": self._get_adjacent_zones(),
-            "step_count": np.array([0], dtype=np.float32)
+            "phase": self.episode_phase,
+            "target_zone": self.target_zone
         }
 
         if self.render_mode == 'human' and self.visualizer:
             self.visualizer.reset()
             
         return self._get_observation(), {}
+
+    def step(self, action):
+        """A step function with intermediate rewards and learning signals"""
+        assert self.action_space.contains(action), f"Invalid action {action}"
+        
+        reward = 0
+        terminated = False
+        truncated = False
+        self.step_count += 1
+
+        info = {
+            "phase": self.episode_phase,
+            "target_zone": self.target_zone,
+            "chosen_zone": self.chosen_zone,
+            "correct_choice": False,
+            "conditions": {
+                "temp": float(self.temp),
+                "humidity": float(self.humidity), 
+                "pest": float(self.pest_level)
+            },
+            "step_count": self.step_count,
+            "valid_actions": self.get_valid_actions(),
+            "episode_progress": self.episode_progress.copy()
+        }
+
+        # Check if action is valid (for action masking)
+        valid_actions = self.get_valid_actions()
+        if self.config.get('use_action_masking', False) and action not in valid_actions:
+            reward -= 1.0  # Penalty for invalid action
+            info["message"] = f"Invalid action {action} for phase {self.episode_phase}"
+            # Don't terminate, just penalize
+        else:
+            # PHASE 1: ANALYZE CONDITIONS
+            if self.episode_phase == "ANALYZE":
+                if action == 21:  # Read conditions
+                    self.has_read_conditions = True
+                    self.conditions_analyzed = True
+                    self.episode_phase = "NAVIGATE"
+                    
+                    # Progress tracking and rewards
+                    if not self.episode_progress['conditions_read']:
+                        self.episode_progress['conditions_read'] = True
+                        reward += 2.0  # Good reward for reading conditions
+                        info["message"] = f"Conditions analyzed: T={self.temp:.1f}°C, H={self.humidity:.1f}%, P={self.pest_level:.2f}"
+                    
+                else:
+                    reward -= 0.5  # Penalty for not reading conditions first
+                    info["message"] = "Must read conditions first (action 21)"
+
+            # PHASE 2: NAVIGATE TO ZONE
+            elif self.episode_phase == "NAVIGATE":
+                if action in [17, 18, 19, 20]:  # Movement actions
+                    # Track that navigation has started
+                    if not self.episode_progress['started_navigation']:
+                        self.episode_progress['started_navigation'] = True
+                        reward += 0.5  # Small reward for starting navigation
+                    
+                    new_pos = self._calculate_new_position(action)
+                    if (0 <= new_pos[0] < self.grid_size[0] and 
+                        0 <= new_pos[1] < self.grid_size[1]):
+                        self.current_pos = new_pos
+                        
+                        # INTERMEDIATE NAVIGATION REWARDS
+                        if self.config.get('intermediate_rewards', True):
+                            current_distance = self._calculate_distance_to_target()
+                            
+                            # Reward for getting closer to target
+                            if current_distance < self.previous_distance_to_target:
+                                reward += 0.3  # Moving closer reward
+                                info["message"] = f"Moving closer to target (distance: {current_distance})"
+                            elif current_distance > self.previous_distance_to_target:
+                                reward -= 0.1  # Moving away penalty (small)
+                                info["message"] = f"Moving away from target (distance: {current_distance})"
+                            else:
+                                reward += 0.05  # Small reward for valid movement
+                                info["message"] = "Valid movement"
+                            
+                            # Track best distance reached
+                            if current_distance < self.best_distance_to_target:
+                                self.best_distance_to_target = current_distance
+                                reward += 0.2  # Bonus for reaching new best distance
+                            
+                            self.previous_distance_to_target = current_distance
+                        
+                        # Check if agent reached a zone
+                        current_zone = self.grid_states[tuple(self.current_pos)]
+                        if current_zone != -1:  # Reached a zone
+                            self.chosen_zone = current_zone
+                            self.episode_phase = "TREAT"
+                            
+                            # Progress tracking
+                            if not self.episode_progress['reached_any_zone']:
+                                self.episode_progress['reached_any_zone'] = True
+                                reward += 1.0  # Reward for reaching any zone
+                            
+                            # BONUS for reaching the CORRECT zone
+                            if current_zone == self.target_zone:
+                                if not self.episode_progress['reached_target_zone']:
+                                    self.episode_progress['reached_target_zone'] = True
+                                    reward += 3.0  # BIG bonus for reaching target zone
+                                    info["message"] = f"SUCCESS! Reached correct zone: {self.STATE_TYPES[current_zone]['name']}"
+                                else:
+                                    reward += 1.0
+                            else:
+                                reward += 0.5  # Small reward for reaching wrong zone
+                                info["message"] = f"Reached wrong zone: {self.STATE_TYPES[current_zone]['name']} (target: {self.STATE_TYPES[self.target_zone]['name']})"
+                        
+                    else:
+                        reward -= 0.3  # Penalty for hitting boundary
+                        info["message"] = "Cannot move outside grid"
+                else:
+                    reward -= 0.5  # Penalty for wrong action type
+                    info["message"] = "Must navigate to a zone (actions 17-20)"
+
+            # PHASE 3: APPLY TREATMENT
+            elif self.episode_phase == "TREAT":
+                current_zone = self.grid_states[tuple(self.current_pos)]
+                zone_info = self.STATE_TYPES[current_zone]
+                
+                if action in zone_info["actions"]:
+                    # Progress tracking
+                    if not self.episode_progress['applied_treatment']:
+                        self.episode_progress['applied_treatment'] = True
+                        reward += 1.0  # Reward for applying any valid treatment
+                    
+                    # CHECK IF AGENT CHOSE CORRECT ZONE
+                    if self.chosen_zone == self.target_zone:
+                        reward += 8.0  # BIG REWARD for correct zone choice
+                        info["correct_choice"] = True
+                        info["message"] = f"SUCCESS! Correct zone and treatment applied"
+                    else:
+                        reward -= 4.0  # PENALTY for wrong zone choice
+                        info["message"] = f"WRONG ZONE! Should be {self.STATE_TYPES[self.target_zone]['name']}"
+                    
+                    terminated = True  # Episode ends after treatment
+                    
+                else:
+                    reward -= 2.0  # Penalty for invalid treatment
+                    info["message"] = f"Invalid treatment for {zone_info['name']} zone"
+                    terminated = True  # End episode on invalid treatment
+
+        # Update state
+        self.state.update({
+            "position": np.array(self.current_pos, dtype=np.int32),
+            "zone_type": self.grid_states[tuple(self.current_pos)],
+            "phase": self.episode_phase
+        })
+
+        # Truncation check
+        if self.step_count >= self.config['max_steps']:
+            truncated = True
+            reward -= 2.0  # penalty for taking too long
+            info["message"] = "Episode truncated - took too many steps"
+
+        # Add small time penalty to encourage efficiency
+        reward -= 0.02  # Very small step penalty
+
+        info["reward"] = float(reward)
+        info["target_zone_name"] = self.STATE_TYPES[self.target_zone]["name"]
+        if self.chosen_zone is not None:
+            info["chosen_zone_name"] = self.STATE_TYPES[self.chosen_zone]["name"]
+
+        return self._get_observation(), reward, terminated, truncated, info
 
     def _get_observation(self):
         """Return observation based on selected observation type"""
@@ -275,161 +548,80 @@ class StorageEnv(gym.Env):
         else:  # multi
             return {
                 "vector": self._get_mlp_observation(),
-                "image": self._get_cnn_observation()
+                "image": self._get_cnn_observation(),
+                "action_mask": self._get_action_mask()
             }
 
     def _get_mlp_observation(self):
-        """Simplified observation vector"""
-        temp_norm = (self.state["temp"][0] - 20) / 20
-        humidity_norm = (self.state["humidity"][0] - 60) / 30
-        duration_norm = self.state["duration"][0] / self.config['max_days']
-        pest_norm = self.state["pest_level"][0]
+        """Enhanced observation vector with better feature encoding"""
+        temp_norm = (self.temp - 25) / 15  # Normalize around 25°C
+        humidity_norm = (self.humidity - 60) / 30  # Normalize around 60%
+        pest_norm = self.pest_level  # Already 0-1
         pos_norm = np.array(self.current_pos, dtype=np.float32) / max(self.grid_size)
-        zone_norm = self.state["zone_type"] / 4.0
         
-        nearby_counts = np.bincount(self.state["nearby_zones"] + 1, minlength=6)[:5] / 4.0
+        # One-hot encoding for phases
+        phase_encoding = np.zeros(3, dtype=np.float32)
+        phase_idx = {"ANALYZE": 0, "NAVIGATE": 1, "TREAT": 2}[self.episode_phase]
+        phase_encoding[phase_idx] = 1.0
         
-        return np.concatenate([
-            [temp_norm],
-            [humidity_norm], 
-            [self.state["crop_type"] / 2.0],
-            [self.state["storage_method"] / 2.0],
-            [duration_norm],
-            [pest_norm],
-            pos_norm,
-            [zone_norm],
-            nearby_counts[:3]
+        zone_norm = self.state["zone_type"] / 4.0 if self.state["zone_type"] != -1 else -0.25
+        
+        # Distance to target zone (if conditions have been read)
+        distance_to_target = 0.0
+        if self.has_read_conditions:
+            distance_to_target = self._calculate_distance_to_target() / max(self.grid_size)
+        
+        return np.array([
+            temp_norm,
+            humidity_norm,
+            pest_norm,
+            self.state["crop_type"] / 2.0,
+            self.state["storage_method"] / 2.0,
+            pos_norm[0],
+            pos_norm[1], 
+            zone_norm,
+            float(self.has_read_conditions),
+            distance_to_target,
+            *phase_encoding  # Expand the 3-element phase encoding
         ], dtype=np.float32)
 
     def _get_cnn_observation(self):
-        """Enhanced CNN observation"""
+        """Enhanced CNN observation with better visual cues"""
         grid_img = np.zeros((self.grid_size[0], self.grid_size[1], 3), dtype=np.uint8)
         
+        # Draw zones
         for i in range(self.grid_size[0]):
             for j in range(self.grid_size[1]):
                 zone_type = self.grid_states[i,j]
-                grid_img[i,j] = self.STATE_TYPES[zone_type]["color"]
+                if zone_type != -1:
+                    grid_img[i,j] = self.STATE_TYPES[zone_type]["color"]
+                else:
+                    grid_img[i,j] = (50, 50, 50)  # Empty cells
         
+        # Draw agent position with phase-based color
         i, j = self.current_pos
-        grid_img[i,j] = [255, 255, 255]
+        phase_colors = {
+            "ANALYZE": [255, 255, 255],    # White
+            "NAVIGATE": [255, 255, 0],     # Yellow
+            "TREAT": [255, 0, 255]         # Magenta
+        }
+        grid_img[i,j] = phase_colors.get(self.episode_phase, [255, 255, 255])
         
+        # Highlight target zone if conditions have been read
+        if self.has_read_conditions:
+            target_positions = np.where(self.grid_states == self.target_zone)
+            for ti, tj in zip(target_positions[0], target_positions[1]):
+                # Add bright border to target zone
+                original_color = grid_img[ti,tj]
+                grid_img[ti,tj] = [min(255, c + 50) for c in original_color]  # Brighten target
+        
+        # Resize to standard size
         img = cv2.resize(grid_img, (64, 64), interpolation=cv2.INTER_NEAREST)
-        
-        pest_width = int(self.pest_level * 64)
-        img[0, :pest_width, 0] = 255
-        
-        temp_height = int(np.clip((self.state["temp"][0] - 10) / 30, 0, 1) * 64)
-        img[:temp_height, 0, 2] = 255
         
         return img
 
-    def step(self, action):
-        """Improved step function with updated action handling"""
-        assert self.action_space.contains(action), f"Invalid action {action}"
-        
-        reward = 0
-        terminated = False
-        truncated = False
-        self.last_action = action
-        self.step_count += 1
-        
-        prev_pest_level = self.pest_level
-        prev_zone = self.state["zone_type"]
-        
-        # Handle actions with updated numbering
-        if action < 17:  # Zone/treatment actions
-            zone_actions = self.STATE_TYPES[self.state["zone_type"]]["actions"]
-            if action in zone_actions:
-                reward += self._handle_zone_action(action)
-            else:
-                reward -= 1.0  # Invalid action penalty
-        else:  # Movement actions (17-20)
-            new_pos = self._calculate_new_position(action)
-            if new_pos != self.current_pos:
-                reward += self._calculate_movement_reward(new_pos)
-                self.current_pos = new_pos
-                self.visited_positions.add(tuple(self.current_pos))
-                if len(self.visited_positions) > self.exploration_bonus:
-                    reward += 0.1
-                    self.exploration_bonus = len(self.visited_positions)
-            else:
-                reward -= 0.1
-
-        self._simulate_weather_change()
-        self._update_pest_level()
-        
-        self.day += 1
-        self.state.update({
-            "duration": np.array([self.day], dtype=np.float32),
-            "pest_level": np.array([self.pest_level], dtype=np.float32),
-            "position": np.array(self.current_pos, dtype=np.int32),
-            "zone_type": self.grid_states[tuple(self.current_pos)],
-            "nearby_zones": self._get_adjacent_zones(),
-            "step_count": np.array([self.step_count], dtype=np.float32)
-        })
-
-        # Enhanced reward shaping
-        pest_improvement = prev_pest_level - self.pest_level
-        if pest_improvement > 0:
-            reward += pest_improvement * 10
-        
-        if self.pest_level < self.best_pest_level:
-            reward += (self.best_pest_level - self.pest_level) * 5
-            self.best_pest_level = self.pest_level
-        
-        suitability = self.calculate_zone_suitability()[tuple(self.current_pos)]
-        reward += suitability * 0.5
-        
-        if self.pest_level < 0.8:
-            reward += 0.2
-        
-        reward -= 0.05
-        
-        # Check termination conditions
-        if self.pest_level >= 0.95:
-            reward -= 10
-            terminated = True
-        elif self.day >= self.config['max_days']:
-            reward += (1.0 - self.pest_level) * 5
-            terminated = True
-        elif self.last_action == 15:  # Emergency harvest
-            reward += (1.0 - self.pest_level) * 8
-            terminated = True
-        elif self.state["zone_type"] == 4 and self.time_in_risk_zone > 3:
-            reward -= 5
-            terminated = True
-        
-        self.cumulative_reward += reward
-        
-        info = {
-            "current_action": self.ACTIONS[action],
-            "day": self.day,
-            "position": tuple(self.current_pos),
-            "zone_type": self.STATE_TYPES[self.state["zone_type"]]["name"],
-            "suitability": float(suitability),
-            "pest_level": float(self.pest_level),
-            "time_in_risk": float(self.time_in_risk_zone),
-            "visited": len(self.visited_positions),
-            "cumulative_reward": float(self.cumulative_reward),
-            "pest_improvement": float(pest_improvement)
-        }
-
-        return self._get_observation(), reward, terminated, truncated, info
-
-    def _get_adjacent_zones(self):
-        """Get neighboring zone types"""
-        directions = [(-1,0), (1,0), (0,-1), (0,1)]
-        zones = []
-        for di, dj in directions:
-            ni, nj = self.current_pos[0]+di, self.current_pos[1]+dj
-            if 0 <= ni < self.grid_size[0] and 0 <= nj < self.grid_size[1]:
-                zones.append(self.grid_states[ni,nj])
-            else:
-                zones.append(-1)
-        return np.array(zones, dtype=np.int32)
-
     def _calculate_new_position(self, action):
-        """Calculate new position after movement - updated for new action indices"""
+        """Calculate new position after movement"""
         new_pos = self.current_pos.copy()
         if action == 17:  # Up
             new_pos[0] = max(0, new_pos[0]-1)
@@ -440,110 +632,6 @@ class StorageEnv(gym.Env):
         elif action == 20:  # Right
             new_pos[1] = min(self.grid_size[1]-1, new_pos[1]+1)
         return new_pos
-
-    def _calculate_movement_reward(self, new_pos):
-        """Enhanced movement reward with strong risk zone incentives"""
-        target_zone = self.grid_states[tuple(new_pos)]
-        current_suitability = self.calculate_zone_suitability()[tuple(self.current_pos)]
-        target_suitability = self.calculate_zone_suitability()[tuple(new_pos)]
-        
-        suitability_gain = target_suitability - current_suitability
-        
-        if target_zone == 4:  # Moving TO risk Zone
-            self.time_in_risk_zone += 1
-            base_reward = 0.5
-            risk_penalty = -0.2 * self.time_in_risk_zone
-            return base_reward + risk_penalty
-        else:
-            if self.state["zone_type"] == 4:  # Moving OUT of risk zone
-                self.time_in_risk_zone = 0
-                return 0.3 + (2.0 * suitability_gain)
-            else:
-                self.time_in_risk_zone = max(0, self.time_in_risk_zone - 1)
-                return 0.1 + (1.5 * suitability_gain)
-
-    def _handle_zone_action(self, action):
-        """Handle zone-specific actions with improved effects"""
-        zone_type = self.state["zone_type"]
-        zone_info = self.STATE_TYPES[zone_type]
-        
-        if action not in zone_info["actions"]:
-            return -1.0
-        
-        pest_change, action_reward = zone_info["action_effects"][action]
-        
-        # Apply action effects with some environmental variation
-        actual_pest_change = pest_change * (0.8 + 0.4 * random.random())
-        self.pest_level = np.clip(self.pest_level + actual_pest_change, 0, 1)
-        
-        return action_reward
-
-    def calculate_zone_suitability(self):
-        """Enhanced suitability calculation"""
-        scores = np.zeros(self.grid_size)
-        temp = self.state['temp'][0]
-        humidity = self.state['humidity'][0]
-        crop_type = self.state['crop_type']
-        
-        for i in range(self.grid_size[0]):
-            for j in range(self.grid_size[1]):
-                zone = self.STATE_TYPES[self.grid_states[i,j]]
-                
-                if zone['name'] == "Risk Zone":
-                    scores[i,j] = 0
-                    continue
-                
-                if zone['ideal_temp'] is None:  # Risk zone
-                    scores[i,j] = 0
-                    continue
-                
-                temp_min, temp_max = zone['ideal_temp']
-                if temp_min <= temp <= temp_max:
-                    temp_score = 1.0
-                else:
-                    temp_score = max(0, 1 - abs(temp - (temp_min + temp_max)/2) / 10)
-                
-                hum_min, hum_max = zone['ideal_humidity']
-                if hum_min <= humidity <= hum_max:
-                    humidity_score = 1.0
-                else:
-                    humidity_score = max(0, 1 - abs(humidity - (hum_min + hum_max)/2) / 20)
-                
-                crop_multiplier = [1.0, 0.9, 1.1][crop_type]
-                
-                scores[i,j] = (temp_score * 0.5 + humidity_score * 0.5) * crop_multiplier
-                
-        return scores
-
-    def _simulate_weather_change(self):
-        """More stable weather changes"""
-        temp_change = random.uniform(-1, 1)
-        humidity_change = random.uniform(-3, 3)
-        
-        self.state["temp"] = np.clip(
-            self.state["temp"] + temp_change,
-            15, 35
-        )
-        self.state["humidity"] = np.clip(
-            self.state["humidity"] + humidity_change,
-            40, 85
-        )
-
-    def _update_pest_level(self):
-        """More balanced pest growth"""
-        base_risk = 0.02
-        temp = self.state["temp"][0]
-        humidity = self.state["humidity"][0]
-        
-        temp_effect = max(0, (temp - 25) * 0.005)
-        humidity_effect = max(0, (humidity - 65) * 0.008)
-        
-        storage_risk = [0.0, 0.01, 0.02][self.state["storage_method"]]
-        crop_factor = [0.8, 1.0, 1.1][self.state["crop_type"]]
-        zone_risk = {0: 0.3, 1: 0.5, 2: 0.6, 3: 0.7, 4: 1.5}[self.state["zone_type"]]
-        
-        daily_increase = (base_risk + temp_effect + humidity_effect + storage_risk) * crop_factor * zone_risk
-        self.pest_level = np.clip(self.pest_level + daily_increase, 0, 1)
 
     def _init_visualization(self):
         """Initialize visualization"""
@@ -558,6 +646,11 @@ class StorageEnv(gym.Env):
         """Render environment"""
         if self.render_mode == 'human' and self.visualizer:
             return self.visualizer.render()
+        
+        if self.render_mode == 'human' and self.visualizer:
+            return self.visualizer.render()
+
+
         elif self.render_mode == 'console' or self.render_mode is None:
             self._console_render()
             return None
@@ -567,62 +660,118 @@ class StorageEnv(gym.Env):
             return self._get_cnn_observation()
 
     def _console_render(self):
-        """Enhanced console rendering"""
-        print(f"\n=== Day {self.day}/{self.config['max_days']} ===")
-        print(f"Position: {self.current_pos} | Zone: {self.STATE_TYPES[self.state['zone_type']]['name']}")
-        print(f"Zone Description: {self.STATE_TYPES[self.state['zone_type']]['description']}")
-        print(f"Temp: {self.state['temp'][0]:.1f}°C | Humidity: {self.state['humidity'][0]:.1f}%")
-        print(f"Crop: {self.CROP_TYPES[self.state['crop_type']]} | Storage: {self.STORAGE_METHODS[self.state['storage_method']]}")
+        """Enhanced console rendering with progress tracking and curriculum info"""
+        print(f"\n=== EPISODE STEP {self.step_count}/{self.config['max_steps']} ===")
+        print(f"Phase: {self.episode_phase} | Curriculum Stage: {self.config.get('curriculum_stage', 1)}")
+        print(f"Position: {self.current_pos}")
         
-        pest_bar = '█' * int(self.pest_level * 20) + '░' * (20 - int(self.pest_level * 20))
-        print(f"Pest Risk: {pest_bar} {self.pest_level*100:.1f}%")
-        print(f"Suitability: {self.calculate_zone_suitability()[tuple(self.current_pos)]:.2f}")
-        print(f"Cumulative Reward: {self.cumulative_reward:.2f}")
+        current_zone = self.grid_states[tuple(self.current_pos)]
+        if current_zone != -1:
+            print(f"Current Zone: {self.STATE_TYPES[current_zone]['name']}")
+        else:
+            print("Current Zone: Empty space")
         
-        # Show recommended actions for current zone
-        zone_type = self.state["zone_type"]
-        zone_info = self.STATE_TYPES[zone_type]
-        # Filter out movement actions (17-20) but keep all treatment actions (0-16)
-        treatment_actions = [a for a in zone_info["actions"] if a <= 16]
-        recommended_actions = [self.ACTIONS[a] for a in treatment_actions]
-        
-        print(f"Available Actions ({len(treatment_actions)} total):")
-        for i, action_idx in enumerate(treatment_actions):
-            print(f"  {i+1}. {self.ACTIONS[action_idx]} (Action {action_idx})")
-        
-        if not recommended_actions:
-            print("⚠️  WARNING: No valid treatment actions available for this zone!")
-        
-        # Show why these actions are recommended
-        if zone_type == 0:
-            print("→ Focus: Maintain perfect conditions with minimal intervention")
-        elif zone_type == 1:
-            print("→ Focus: Add moisture to prevent grain brittleness and dust")
-        elif zone_type == 2:
-            print("→ Focus: Leverage good airflow to prevent mold and fungus")
-        elif zone_type == 3:
-            print("→ Focus: Remove excess moisture before mold develops")
-        elif zone_type == 4:
-            print("→ Focus: EMERGENCY - Save crop from active pest damage")
-            print("→ These are CRITICAL INTERVENTIONS - choose quickly!")
-        
-        if hasattr(self, 'last_action') and self.last_action is not None:
-            print(f"Last Action: {self.ACTIONS[self.last_action]}")
+        # Show conditions if read
+        if self.has_read_conditions:
+            print(f"\n CONDITIONS ANALYZED:")
+            print(f" Temperature: {self.temp:.1f}°C")
+            print(f" Humidity: {self.humidity:.1f}%")
+            print(f" Pest Level: {self.pest_level:.2f}")
+            print(f" Target Zone: {self.STATE_TYPES[self.target_zone]['name']}")
             
-        # Debug info for all zones to see what's happening
-        print(f"DEBUG - Zone {zone_type} raw actions: {zone_info['actions']}")
-        print(f"DEBUG - Filtered treatment actions: {treatment_actions}")
-        print(f"DEBUG - Action effects keys: {list(zone_info['action_effects'].keys())}")
-        print(f"DEBUG - Total ACTIONS array length: {len(self.ACTIONS)}")
+            # Show distance to target during navigation
+            if self.episode_phase == "NAVIGATE":
+                distance = self._calculate_distance_to_target()
+                print(f"  Distance to Target: {distance} steps")
+                print(f"  Best Distance: {self.best_distance_to_target} steps")
+        else:
+            print(f"\n Conditions not yet analyzed")
         
-        # Let's also check if action indices are valid
-        for action_idx in zone_info['actions']:
-            if action_idx < len(self.ACTIONS):
-                print(f"DEBUG - Action {action_idx}: {self.ACTIONS[action_idx]}")
+        # Show episode progress
+        print(f"\n EPISODE PROGRESS:")
+        progress_items = [
+            ("Conditions Read", self.episode_progress['conditions_read']),
+            ("Started Navigation", self.episode_progress['started_navigation']),
+            ("Reached Any Zone", self.episode_progress['reached_any_zone']),
+            ("Reached Target Zone", self.episode_progress['reached_target_zone']),
+            ("Applied Treatment", self.episode_progress['applied_treatment'])
+        ]
+        
+        for item, completed in progress_items:
+            status = "Great" if completed else "Needs Improvement"
+            print(f"   {status} {item}")
+        
+        # Show chosen zone if any
+        if self.chosen_zone is not None:
+            print(f"\n Chosen Zone: {self.STATE_TYPES[self.chosen_zone]['name']}")
+            if self.chosen_zone == self.target_zone:
+                print(f"  CORRECT CHOICE!")
             else:
-                print(f"DEBUG - INVALID Action {action_idx}: OUT OF RANGE!")
+                print(f"  WRONG! Should be {self.STATE_TYPES[self.target_zone]['name']}")
+        
+        # Show available actions based on phase (with action masking info)
+        valid_actions = self.get_valid_actions()
+        print(f"\n AVAILABLE ACTIONS (Action Masking: {'ON' if self.config.get('use_action_masking', False) else 'OFF'}):")
+        
+        if self.episode_phase == "ANALYZE":
+            print("   21. Read conditions (REQUIRED FIRST)")
+        elif self.episode_phase == "NAVIGATE":
+            print("   17. Move up    | 18. Move down")
+            print("   19. Move left  | 20. Move right")
+            if self.config.get('intermediate_rewards', True):
+                print(" Tip: Moving closer to target zone gives more reward!")
+        elif self.episode_phase == "TREAT":
+            if current_zone != -1:
+                zone_actions = self.STATE_TYPES[current_zone]["actions"]
+                print(f"   Available treatments in {self.STATE_TYPES[current_zone]['name']}:")
+                for action_idx in zone_actions:
+                    print(f"   {action_idx}. {self.ACTIONS[action_idx]}")
+            else:
+                print("   No valid actions in empty cell!")
+        
+        # Show curriculum stage info
+        curriculum_stage = self.config.get('curriculum_stage', 1)
+        stage_descriptions = {
+            1: "Easy - Start adjacent to target zone",
+            2: "Medium - Start within 2 steps of target",
+            3: "Full - Random start position"
+        }
+        print(f"\n Curriculum Stage {curriculum_stage}: {stage_descriptions.get(curriculum_stage, 'Unknown')}")
+        
+        print()
+
+    def get_success_metrics(self) -> Dict:
+        """Get detailed success metrics for training monitoring"""
+        return {
+            'conditions_read': self.episode_progress['conditions_read'],
+            'started_navigation': self.episode_progress['started_navigation'],
+            'reached_any_zone': self.episode_progress['reached_any_zone'],
+            'reached_target_zone': self.episode_progress['reached_target_zone'],
+            'applied_treatment': self.episode_progress['applied_treatment'],
+            'chose_correct_zone': self.chosen_zone == self.target_zone if self.chosen_zone is not None else False,
+            'episode_length': self.step_count,
+            'best_distance_achieved': self.best_distance_to_target,
+            'final_distance_to_target': self._calculate_distance_to_target(),
+            'curriculum_stage': self.config.get('curriculum_stage', 1),
+            'phase_reached': self.episode_phase
+        }
+
+    def update_curriculum(self, success_rate: float, episodes_completed: int):
+        """Automatically progress curriculum based on success rate"""
+        current_stage = self.config.get('curriculum_stage', 1)
+        
+        # Progress criteria
+        if current_stage == 1 and success_rate > 0.7 and episodes_completed > 1000:
+            self.config['curriculum_stage'] = 2
+            print(f" Curriculum advanced to Stage 2 (Medium difficulty)")
+        elif current_stage == 2 and success_rate > 0.6 and episodes_completed > 5000:
+            self.config['curriculum_stage'] = 3
+            print(f" Curriculum advanced to Stage 3 (Full difficulty)")
 
     def close(self):
-        """Cleanup"""
+        """Clean up resources"""
         if self.visualizer:
             self.visualizer.close()
+        if hasattr(self, 'pygame') and self.render_mode == 'human':
+            import pygame
+            pygame.quit()

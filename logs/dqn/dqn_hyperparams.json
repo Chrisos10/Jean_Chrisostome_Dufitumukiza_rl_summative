@@ -1,0 +1,27 @@
+{
+  "hyperparameters": {
+    "learning_rate": 0.001,
+    "gamma": 0.99,
+    "exploration_fraction": 0.3,
+    "exploration_initial_eps": 1.0,
+    "exploration_final_eps": 0.05,
+    "buffer_size": 10000,
+    "batch_size": 64,
+    "learning_starts": 1000,
+    "target_update_interval": 500,
+    "train_freq": 4,
+    "policy_kwargs": {
+      "net_arch": [
+        256,
+        256,
+        128
+      ],
+      "activation_fn": "ReLU"
+    },
+    "verbose": 1,
+    "seed": 42
+  },
+  "total_timesteps": 150000,
+  "training_time_seconds": 337.893952,
+  "timestamp": "20250801_010957"
+}
