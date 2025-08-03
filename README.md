@@ -155,6 +155,7 @@ Future improvements could include:
 git clone https://github.com/Chrisos10/Jean_Chrisostome_Dufitumukiza_rl_summative.git
 cd Jean_Chrisostome_Dufitumukiza_rl_summative
 pip install -r requirements.txt
+```
 
 ## Current Limitations & Future Work
 
