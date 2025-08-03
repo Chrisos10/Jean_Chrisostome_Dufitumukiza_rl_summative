@@ -12,97 +12,149 @@ This system not only trains agents to make real-time decisions but also offers v
 
 Link to demo video: https://drive.google.com/file/d/1gddwCn-aW05aWHdsmZCRPc7tRKPo9XGk/view?usp=sharing
 
-## Custom Environment Description
+## Environment Description
 
-### Agent Behavior
+### Agent
 
-- The agent represents a digital technician operating inside a storage facility
-- **Responsibilities**:
-  - Analyzes environmental data (Temperature, Humidity, pest levels)
-  - Navigates to the appropriate treatment zone
-  - Applies the correct chemical-free intervention (e.g., neem oil, ventilation, solar drying)
+The agent represents a storage management specialist with capabilities to:
+- Analyze environmental conditions (temperature, humidity, pest levels)
+- Navigate through a 5×5 storage facility
+- Apply appropriate natural treatments
+- Perform multi-phase decision making with phase-appropriate actions
 
+### Action Space
 
----
+22 discrete actions categorized into:
 
-###  Action Space
+1. **Storage Management Actions (17):**
+   - Ventilation control
+   - Moisture management
+   - Natural pest treatments (neem, wood ash, etc.)
+   - Emergency measures
 
-- **Type**: Discrete (22 actions)
-- **Breakdown**:
-  - `17 Treatment Actions`: Organic, physical, or biological (e.g., diatomaceous earth, ash, plant extracts)
-  - `4 Navigation Actions`: Move Up, Down, Left, Right
-  - `1 Condition Reading Action`: Start of the Analyze phase
-- **Dynamic Action Masking**: Prevents illegal actions based on phase
+2. **Navigation Actions (4):** Move up, down, left, right
 
----
+3. **Analysis Action (1):** Read environmental conditions
 
-### State Representation
+**Action Masking:** Only phase-appropriate actions are valid:
+- ANALYZE: Only reading conditions
+- NAVIGATE: Only movement
+- TREAT: Only zone-specific treatments
 
-- **Multi-modal Support**:
-  - **Vector (MLP)**: Numerical array of 13 normalized values (temp, RH, pest level, position, zone, etc.)
-  - **Image (CNN)**: 64×64 RGB rendering of the storage grid and agent status
-  - **Dict Mode**: Combined observations with action masks and visual-state vectors
-- **Designed for curriculum learning**, enabling agents to generalize across difficulty levels
+### State Space
 
----
+Three observation modes:
 
-### Reward Function
+1. **MLP Observation (Vector):** 13-dimensional normalized vector
+   - Environmental conditions
+   - Storage metadata
+   - Spatial information
+   - Episode progress
+   - Phase encoding
 
-The agent is guided by a multi-level reward function tailored to the 3-phase structure:
+2. **CNN Observation:** 64×64×3 RGB image
+   - Color-coded zones
+   - Agent position
+   - Target highlighting
 
-- **Analyze Phase**:
-  - +2: Correctly reads conditions
-  - -0.5: Takes unrelated actions
+3. **Multi-modal Observation:** Dictionary combining vector, image, and action mask
 
-- **Navigate Phase**:
-  - +0.3: Moves closer to correct zone
-  - -0.1 to -0.3: Drifts from target
-  - +3: Reaches goal zone
+### Reward Structure
 
-- **Treat Phase**:
-  - +8: Applies correct intervention
-  - -4: Applies wrong intervention
-  - -2: Applies treatment in wrong zone
+Multi-component reward system with:
 
-- **Time Penalty**:
-  - -0.02 per step to encourage efficient behavior
+- **Phase-based rewards:**
+  - ANALYZE: +2.0 for reading conditions
+  - NAVIGATE: Progress rewards (+0.3 closer, +3.0 correct zone)
+  - TREAT: +8.0 correct treatment, -4.0 incorrect
 
-- **Timeout Penalty**:
-  - -2 if episode ends without completion
+- **General penalties:**
+  - Time penalty: -0.02/step
+  - Invalid action: -1.0
 
----
+- **Curriculum learning:** Adapts to three difficulty stages
 
-### Visualization & Simulation
+## Implemented Methods
 
-- **Developed with `pygame`** for real-time rendering
-- **Features**:
-  - 5×5 grid with semantic coloring (Critical, Safe, Too Dry, etc.)
-  - Pest level meter and agent display
-  - Visual phase cues (Blue = Analyze, Yellow = Navigate, Green = Treat)
-  - Target zones flash after reading conditions
----
+### Deep Q-Network (DQN)
+- Architecture: [256, 256, 128] fully connected network
+- Features: Experience replay (10,000 samples), target network updates
+- Exploration: ε-greedy (1.0→0.05 over 30% training)
+- Learning rate: 1e-3, γ=0.99
 
-## Trained Algorithms
+### Policy Gradient Methods
 
-Four RL methods were evaluated on this environment:
+#### Proximal Policy Optimization (PPO)
+- Actor-critic with [256, 256] hidden units
+- Clip range: 0.2, GAE λ=0.95
+- Rollout buffer: 2,048 steps, 10 optimization epochs
+- Learning rate: 3e-4
 
-| Algorithm | Description | Performance Summary |
-|-----------|-------------|---------------------|
-| **DQN** | Off-policy Q-learning with experience replay | Learns steadily but has slower convergence |
-| **A2C** | On-policy actor-critic with entropy regularization | Fast learner, but needed careful tuning |
-| **PPO** | Clipped Proximal Policy Optimization with GAE | Best performance, stable and sample-efficient |
-| **REINFORCE** | Vanilla Monte Carlo policy gradient | Unstable without tuning, learned task phases but not semantics |
+#### Advantage Actor-Critic (A2C)
+- Similar architecture to PPO
+- n_steps=20, GAE λ=0.95
+- Learning rate: 5e-4
 
----
+#### REINFORCE
+- Pure policy gradient (no critic)
+- High entropy coefficient (0.3)
+- Learning rate: 1e-4
 
-## Hyperparameter Insights
+## Hyperparameter Optimization
 
-**PPO** stood out due to:
-- `n_steps=2048`: Enables full-episode rollouts
-- `clip_range=0.2`: Prevents abrupt policy shifts
-- `net_arch=[256,256]`: Balances capacity and generalization
+Key findings from hyperparameter tuning:
 
----
+| Method | Optimal Parameters | Impact |
+|--------|--------------------|--------|
+| **DQN** | Batch size=64, ε-decay over 30% training | Stable but slow learning |
+| **A2C** | n_steps=20, ent_coef=0.05 | Reduced oscillation issues |
+| **PPO** | n_steps=2048, clip_range=0.2 | Most stable performance |
+| **REINFORCE** | ent_coef=0.3, lr=1e-4 | Improved exploration |
+
+## Results
+
+**Performance Comparison:**
+
+| Metric | PPO | A2C | DQN | REINFORCE |
+|--------|-----|-----|-----|-----------|
+| Cumulative Reward | High | Medium | Low | Variable |
+| Training Stability | Best | Moderate | Good | Poor |
+| Generalization | Excellent | Good | Fair | Poor |
+| Semantic Understanding | Yes | Partial | Limited | No |
+
+**Key Findings:**
+- PPO achieved best overall performance with stable learning and semantic understanding
+- A2C learned quickly but showed oscillation behavior
+- DQN was stable but slow to converge
+- REINFORCE struggled with high variance
+
+## Conclusion
+
+PPO emerged as the most effective method for this environment, demonstrating:
+- Stable policy updates
+- Effective learning of the three-phase task structure
+- Good generalization to new scenarios
+- Semantic understanding of zone conditions
+
+Future improvements could include:
+- Enhanced treatment selection logic
+- Dynamic weather conditions
+- More sophisticated reward shaping
+
+## Getting Started
+
+### Prerequisites
+- Python 3.7+
+- PyTorch
+- Gymnasium
+- NumPy
+- Pygame (for visualization)
+
+### Installation
+```bash
+git clone https://github.com/Chrisos10/Jean_Chrisostome_Dufitumukiza_rl_summative.git
+cd Jean_Chrisostome_Dufitumukiza_rl_summative
+pip install -r requirements.txt
 
 ## Current Limitations & Future Work
 
